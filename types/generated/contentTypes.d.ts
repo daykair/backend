@@ -564,25 +564,31 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     singularName: 'order';
     pluralName: 'orders';
     displayName: 'order';
+    description: '';
   };
   options: {
     draftAndPublish: true;
   };
   attributes: {
     slug: Schema.Attribute.UID;
-    adress: Schema.Attribute.String;
-    city: Schema.Attribute.String;
+    adress: Schema.Attribute.String & Schema.Attribute.Private;
+    city: Schema.Attribute.String & Schema.Attribute.Private;
     deliveryMethod: Schema.Attribute.String;
-    email: Schema.Attribute.String;
+    email: Schema.Attribute.String & Schema.Attribute.Private;
     method: Schema.Attribute.String;
-    option: Schema.Attribute.String;
-    phone: Schema.Attribute.String;
+    option: Schema.Attribute.String & Schema.Attribute.Private;
+    phone: Schema.Attribute.String & Schema.Attribute.Private;
     orderStatus: Schema.Attribute.String;
     orderPlaced: Schema.Attribute.DateTime;
     orderTotal: Schema.Attribute.Decimal;
-    state: Schema.Attribute.String;
+    state: Schema.Attribute.String & Schema.Attribute.Private;
     order: Schema.Attribute.JSON;
-    clientName: Schema.Attribute.String;
+    clientName: Schema.Attribute.String & Schema.Attribute.Private;
+    referenceImage: Schema.Attribute.Media<
+      'images' | 'files' | 'videos' | 'audios'
+    > &
+      Schema.Attribute.Private;
+    paymentReference: Schema.Attribute.Integer;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;

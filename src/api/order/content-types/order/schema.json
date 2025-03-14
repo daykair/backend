@@ -4,7 +4,8 @@
   "info": {
     "singularName": "order",
     "pluralName": "orders",
-    "displayName": "order"
+    "displayName": "order",
+    "description": ""
   },
   "options": {
     "draftAndPublish": true
@@ -15,25 +16,31 @@
       "type": "uid"
     },
     "adress": {
-      "type": "string"
+      "type": "string",
+      "required": false,
+      "private": true
     },
     "city": {
-      "type": "string"
+      "type": "string",
+      "private": true
     },
     "deliveryMethod": {
       "type": "string"
     },
     "email": {
-      "type": "string"
+      "type": "string",
+      "private": true
     },
     "method": {
       "type": "string"
     },
     "option": {
-      "type": "string"
+      "type": "string",
+      "private": true
     },
     "phone": {
-      "type": "string"
+      "type": "string",
+      "private": true
     },
     "orderStatus": {
       "type": "string"
@@ -45,13 +52,31 @@
       "type": "decimal"
     },
     "state": {
-      "type": "string"
+      "type": "string",
+      "required": false,
+      "private": true
     },
     "order": {
       "type": "json"
     },
     "clientName": {
-      "type": "string"
+      "type": "string",
+      "private": true
+    },
+    "referenceImage": {
+      "type": "media",
+      "multiple": false,
+      "required": false,
+      "private": true,
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos",
+        "audios"
+      ]
+    },
+    "paymentReference": {
+      "type": "integer"
     }
   }
 }
