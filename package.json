@@ -7,7 +7,7 @@
 		"build": "strapi build",
 		"deploy": "strapi deploy",
 		"develop": "strapi develop",
-		"postinstall": "npm rebuild sharp",
+		"postinstall": "pnpm rebuild sharp",
 		"start": "strapi start",
 		"strapi": "strapi"
 	},
