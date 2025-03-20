@@ -1,7 +1,7 @@
 module.exports = (config, { strapi }) => {
   return async (ctx, next) => {
     const allowedOrigin = 'https://front-saodi.vercel.app';
-    const allowedIPs = '100.64.0.2';
+    const allowedIPs = ['100.64.0.5', '100.64.0.2', '100.64.0.3', '100.64.0.4'];
 
     // Obtener IP y Origen/Referer del cliente
     const clientIP = ctx.request.ip;
@@ -10,7 +10,7 @@ module.exports = (config, { strapi }) => {
     console.log('Client IP:', clientIP);
     // Validar si coincide con el origen o IP permitidos
     const isValidOrigin = origin?.startsWith(allowedOrigin);
-    const isValidIP = clientIP === allowedIPs;
+    const isValidIP = allowedIPs.includes(clientIP);
   
 
     // Bloquear si no cumple
