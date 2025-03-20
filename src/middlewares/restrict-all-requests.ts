@@ -14,7 +14,7 @@ module.exports = (config, { strapi }) => {
   
 
     // Bloquear si no cumple
-    if (!isValidOrigin || !isValidIP) {
+    if (!isValidOrigin && !isValidIP) {
       return ctx.unauthorized('Acceso no autorizado.');
     }
 
