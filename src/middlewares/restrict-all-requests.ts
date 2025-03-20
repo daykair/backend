@@ -1,7 +1,7 @@
 module.exports = (config, { strapi }) => {
   return async (ctx, next) => {
     const allowedOrigin = 'https://front-chi-jet.vercel.app';
-    const allowedIPs = '200.8.173.126';
+    const allowedIPs = '100.64.0.2';
 
     // Obtener IP y Origen/Referer del cliente
     const clientIP = ctx.request.ip;
