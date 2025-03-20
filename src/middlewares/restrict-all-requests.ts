@@ -6,7 +6,8 @@ module.exports = (config, { strapi }) => {
     // Obtener IP y Origen/Referer del cliente
     const clientIP = ctx.request.ip;
     const origin = ctx.request.headers.origin || ctx.request.headers.referer;
-    console.log(origin);
+    console.log('Client Origin:', origin);
+    console.log('Client IP:', clientIP);
     // Validar si coincide con el origen o IP permitidos
     const isValidOrigin = origin?.startsWith(allowedOrigin);
     const isValidIP = clientIP === allowedIPs;
