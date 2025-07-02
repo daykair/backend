@@ -9,5 +9,4 @@ export default [
 	"strapi::session",
 	"strapi::favicon",
 	"strapi::public",
-  { name: "global::restrict-all-requests" },
 ];
