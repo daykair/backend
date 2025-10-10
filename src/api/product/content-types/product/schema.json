@@ -46,9 +46,9 @@
     },
     "categories": {
       "type": "relation",
-      "relation": "oneToMany",
+      "relation": "manyToMany",
       "target": "api::category.category",
-      "mappedBy": "product"
+      "mappedBy": "products"
     },
     "price": {
       "required": true,

@@ -502,7 +502,7 @@ export interface ApiCategoryCategory extends Struct.CollectionTypeSchema {
     image: Schema.Attribute.Media<'images' | 'files' | 'videos' | 'audios'>;
     isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
     Discount: Schema.Attribute.Decimal;
-    product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
+    products: Schema.Attribute.Relation<'manyToMany', 'api::product.product'>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -632,7 +632,7 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
     >;
     colors: Schema.Attribute.Relation<'oneToMany', 'api::color.color'>;
     categories: Schema.Attribute.Relation<
-      'oneToMany',
+      'manyToMany',
       'api::category.category'
     >;
     price: Schema.Attribute.Integer & Schema.Attribute.Required;
