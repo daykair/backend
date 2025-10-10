@@ -551,6 +551,9 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       }>;
     isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
     discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
+    colorImage: Schema.Attribute.Media<
+      'images' | 'files' | 'videos' | 'audios'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;

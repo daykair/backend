@@ -50,6 +50,16 @@
     "discount": {
       "type": "decimal",
       "default": 0
+    },
+    "colorImage": {
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos",
+        "audios"
+      ],
+      "type": "media",
+      "multiple": false
     }
   }
 }
