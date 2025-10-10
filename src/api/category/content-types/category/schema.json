@@ -19,14 +19,29 @@
       "type": "uid"
     },
     "image": {
+      "type": "media",
+      "multiple": false,
+      "required": false,
       "allowedTypes": [
         "images",
         "files",
         "videos",
         "audios"
-      ],
-      "type": "media",
-      "multiple": false
+      ]
+    },
+    "isDiscounted": {
+      "type": "boolean",
+      "default": false,
+      "required": false
+    },
+    "Discount": {
+      "type": "decimal"
+    },
+    "product": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::product.product",
+      "inversedBy": "categories"
     }
   }
 }

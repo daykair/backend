@@ -500,6 +500,9 @@ export interface ApiCategoryCategory extends Struct.CollectionTypeSchema {
     name: Schema.Attribute.String;
     slug: Schema.Attribute.UID;
     image: Schema.Attribute.Media<'images' | 'files' | 'videos' | 'audios'>;
+    isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    Discount: Schema.Attribute.Decimal;
+    product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -546,6 +549,8 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       Schema.Attribute.SetMinMaxLength<{
         maxLength: 6;
       }>;
+    isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -628,6 +633,8 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
       'api::category.category'
     >;
     price: Schema.Attribute.Integer & Schema.Attribute.Required;
+    discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
+    isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;

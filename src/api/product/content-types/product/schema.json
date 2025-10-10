@@ -47,11 +47,20 @@
     "categories": {
       "type": "relation",
       "relation": "oneToMany",
-      "target": "api::category.category"
+      "target": "api::category.category",
+      "mappedBy": "product"
     },
     "price": {
       "required": true,
       "type": "integer"
+    },
+    "discount": {
+      "type": "decimal",
+      "default": 0
+    },
+    "isDiscounted": {
+      "type": "boolean",
+      "default": false
     }
   }
 }
