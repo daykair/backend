@@ -61,6 +61,10 @@
     "isDiscounted": {
       "type": "boolean",
       "default": false
+    },
+    "wholesalePrice": {
+      "type": "integer",
+      "required": true
     }
   }
 }

@@ -1,0 +1,41 @@
+{
+  "kind": "collectionType",
+  "collectionName": "inventory_movements",
+  "info": {
+    "singularName": "inventory-movement",
+    "pluralName": "inventory-movements",
+    "displayName": "Inventory Movement",
+    "description": "Records of inventory loads and unloads"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "color": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::color.color",
+      "inversedBy": "inventory_movements"
+    },
+    "quantity": {
+      "type": "integer",
+      "required": true
+    },
+    "type": {
+      "type": "enumeration",
+      "enum": [
+        "IN",
+        "OUT"
+      ],
+      "required": true
+    },
+    "reason": {
+      "type": "string"
+    },
+    "date": {
+      "type": "datetime",
+      "required": true
+    }
+  }
+}

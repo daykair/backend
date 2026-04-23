@@ -76,7 +76,7 @@
       ]
     },
     "paymentReference": {
-      "type": "integer"
+      "type": "string"
     }
   }
 }

@@ -18,8 +18,7 @@
     },
     "stock": {
       "type": "integer",
-      "required": true,
-      "max": 100
+      "required": true
     },
     "product": {
       "type": "relation",
@@ -60,6 +59,12 @@
       ],
       "type": "media",
       "multiple": false
+    },
+    "inventory_movements": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::inventory-movement.inventory-movement",
+      "mappedBy": "color"
     }
   }
 }

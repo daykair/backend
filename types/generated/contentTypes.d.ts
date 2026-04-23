@@ -531,14 +531,7 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
   };
   attributes: {
     name: Schema.Attribute.String & Schema.Attribute.Required;
-    stock: Schema.Attribute.Integer &
-      Schema.Attribute.Required &
-      Schema.Attribute.SetMinMax<
-        {
-          max: 100;
-        },
-        number
-      >;
+    stock: Schema.Attribute.Integer & Schema.Attribute.Required;
     product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
     images: Schema.Attribute.Media<
       'images' | 'files' | 'videos' | 'audios',
@@ -554,6 +547,10 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
     colorImage: Schema.Attribute.Media<
       'images' | 'files' | 'videos' | 'audios'
     >;
+    inventory_movements: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::inventory-movement.inventory-movement'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -563,6 +560,40 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     locale: Schema.Attribute.String;
     localizations: Schema.Attribute.Relation<'oneToMany', 'api::color.color'>;
+  };
+}
+
+export interface ApiInventoryMovementInventoryMovement
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'inventory_movements';
+  info: {
+    singularName: 'inventory-movement';
+    pluralName: 'inventory-movements';
+    displayName: 'Inventory Movement';
+    description: 'Records of inventory loads and unloads';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
+    quantity: Schema.Attribute.Integer & Schema.Attribute.Required;
+    type: Schema.Attribute.Enumeration<['IN', 'OUT']> &
+      Schema.Attribute.Required;
+    reason: Schema.Attribute.String;
+    date: Schema.Attribute.DateTime & Schema.Attribute.Required;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::inventory-movement.inventory-movement'
+    >;
   };
 }
 
@@ -596,7 +627,7 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
       'images' | 'files' | 'videos' | 'audios'
     > &
       Schema.Attribute.Private;
-    paymentReference: Schema.Attribute.Integer;
+    paymentReference: Schema.Attribute.String;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -638,6 +669,7 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
     price: Schema.Attribute.Integer & Schema.Attribute.Required;
     discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
     isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    wholesalePrice: Schema.Attribute.Integer & Schema.Attribute.Required;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -1030,6 +1062,7 @@ declare module '@strapi/strapi' {
       'plugin::users-permissions.user': PluginUsersPermissionsUser;
       'api::category.category': ApiCategoryCategory;
       'api::color.color': ApiColorColor;
+      'api::inventory-movement.inventory-movement': ApiInventoryMovementInventoryMovement;
       'api::order.order': ApiOrderOrder;
       'api::product.product': ApiProductProduct;
       'admin::permission': AdminPermission;
