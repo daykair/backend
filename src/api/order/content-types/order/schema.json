@@ -77,6 +77,13 @@
     },
     "paymentReference": {
       "type": "string"
+    },
+    "orderType": {
+      "type": "string",
+      "default": "regular"
+    },
+    "amountPaid": {
+      "type": "decimal"
     }
   }
 }

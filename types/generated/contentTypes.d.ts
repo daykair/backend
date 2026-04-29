@@ -660,6 +660,8 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     > &
       Schema.Attribute.Private;
     paymentReference: Schema.Attribute.String;
+    orderType: Schema.Attribute.String & Schema.Attribute.DefaultTo<'regular'>;
+    amountPaid: Schema.Attribute.Decimal;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
