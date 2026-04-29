@@ -563,6 +563,38 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
   };
 }
 
+export interface ApiExpenseExpense extends Struct.CollectionTypeSchema {
+  collectionName: 'expenses';
+  info: {
+    singularName: 'expense';
+    pluralName: 'expenses';
+    displayName: 'Expense';
+    description: 'Store operational expenses';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    title: Schema.Attribute.String & Schema.Attribute.Required;
+    amount: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    date: Schema.Attribute.Date & Schema.Attribute.Required;
+    category: Schema.Attribute.String & Schema.Attribute.Required;
+    reference: Schema.Attribute.String;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::expense.expense'
+    >;
+  };
+}
+
 export interface ApiInventoryMovementInventoryMovement
   extends Struct.CollectionTypeSchema {
   collectionName: 'inventory_movements';
@@ -670,6 +702,7 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
     discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
     isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
     wholesalePrice: Schema.Attribute.Integer & Schema.Attribute.Required;
+    costPrice: Schema.Attribute.Integer & Schema.Attribute.Private;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -1062,6 +1095,7 @@ declare module '@strapi/strapi' {
       'plugin::users-permissions.user': PluginUsersPermissionsUser;
       'api::category.category': ApiCategoryCategory;
       'api::color.color': ApiColorColor;
+      'api::expense.expense': ApiExpenseExpense;
       'api::inventory-movement.inventory-movement': ApiInventoryMovementInventoryMovement;
       'api::order.order': ApiOrderOrder;
       'api::product.product': ApiProductProduct;

@@ -65,6 +65,10 @@
     "wholesalePrice": {
       "type": "integer",
       "required": true
+    },
+    "costPrice": {
+      "type": "integer",
+      "private": true
     }
   }
 }
