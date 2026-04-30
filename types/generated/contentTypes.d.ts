@@ -485,6 +485,41 @@ export interface PluginUsersPermissionsUser
   };
 }
 
+export interface ApiCashRegisterCashRegister
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'cash_registers';
+  info: {
+    singularName: 'cash-register';
+    pluralName: 'cash-registers';
+    displayName: 'Cash Register';
+    description: 'Daily cash register closings';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    date: Schema.Attribute.Date & Schema.Attribute.Required;
+    totalIncome: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    totalExpenses: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    expectedBalance: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    actualBalance: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    difference: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    notes: Schema.Attribute.Text;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::cash-register.cash-register'
+    >;
+  };
+}
+
 export interface ApiCategoryCategory extends Struct.CollectionTypeSchema {
   collectionName: 'categories';
   info: {
@@ -716,6 +751,86 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
     localizations: Schema.Attribute.Relation<
       'oneToMany',
       'api::product.product'
+    >;
+  };
+}
+
+export interface ApiPurchaseOrderPurchaseOrder
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'purchase_orders';
+  info: {
+    singularName: 'purchase-order';
+    pluralName: 'purchase-orders';
+    displayName: 'Purchase Order';
+    description: 'Ordenes de Compra';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    supplier: Schema.Attribute.Relation<'manyToOne', 'api::supplier.supplier'>;
+    status: Schema.Attribute.Enumeration<['pending', 'received', 'cancelled']> &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<'pending'>;
+    paymentStatus: Schema.Attribute.Enumeration<
+      ['pending', 'partial', 'paid']
+    > &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<'pending'>;
+    amountPaid: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
+    totalCost: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    date: Schema.Attribute.DateTime & Schema.Attribute.Required;
+    expectedArrivalDate: Schema.Attribute.Date;
+    reference: Schema.Attribute.String;
+    items: Schema.Attribute.JSON & Schema.Attribute.Required;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::purchase-order.purchase-order'
+    >;
+  };
+}
+
+export interface ApiSupplierSupplier extends Struct.CollectionTypeSchema {
+  collectionName: 'suppliers';
+  info: {
+    singularName: 'supplier';
+    pluralName: 'suppliers';
+    displayName: 'Supplier';
+    description: 'Proveedores';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    companyName: Schema.Attribute.String & Schema.Attribute.Required;
+    contactName: Schema.Attribute.String;
+    email: Schema.Attribute.Email;
+    phone: Schema.Attribute.String;
+    address: Schema.Attribute.Text;
+    notes: Schema.Attribute.Text;
+    purchase_orders: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::purchase-order.purchase-order'
+    >;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::supplier.supplier'
     >;
   };
 }
@@ -1095,12 +1210,15 @@ declare module '@strapi/strapi' {
       'plugin::users-permissions.permission': PluginUsersPermissionsPermission;
       'plugin::users-permissions.role': PluginUsersPermissionsRole;
       'plugin::users-permissions.user': PluginUsersPermissionsUser;
+      'api::cash-register.cash-register': ApiCashRegisterCashRegister;
       'api::category.category': ApiCategoryCategory;
       'api::color.color': ApiColorColor;
       'api::expense.expense': ApiExpenseExpense;
       'api::inventory-movement.inventory-movement': ApiInventoryMovementInventoryMovement;
       'api::order.order': ApiOrderOrder;
       'api::product.product': ApiProductProduct;
+      'api::purchase-order.purchase-order': ApiPurchaseOrderPurchaseOrder;
+      'api::supplier.supplier': ApiSupplierSupplier;
       'admin::permission': AdminPermission;
       'admin::user': AdminUser;
       'admin::role': AdminRole;

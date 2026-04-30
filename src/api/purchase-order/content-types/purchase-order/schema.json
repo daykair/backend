@@ -1,0 +1,64 @@
+{
+  "kind": "collectionType",
+  "collectionName": "purchase_orders",
+  "info": {
+    "singularName": "purchase-order",
+    "pluralName": "purchase-orders",
+    "displayName": "Purchase Order",
+    "description": "Ordenes de Compra"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "supplier": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::supplier.supplier",
+      "inversedBy": "purchase_orders"
+    },
+    "status": {
+      "type": "enumeration",
+      "enum": [
+        "pending",
+        "received",
+        "cancelled"
+      ],
+      "default": "pending",
+      "required": true
+    },
+    "paymentStatus": {
+      "type": "enumeration",
+      "enum": [
+        "pending",
+        "partial",
+        "paid"
+      ],
+      "default": "pending",
+      "required": true
+    },
+    "amountPaid": {
+      "type": "decimal",
+      "default": 0
+    },
+    "totalCost": {
+      "type": "decimal",
+      "required": true
+    },
+    "date": {
+      "type": "datetime",
+      "required": true
+    },
+    "expectedArrivalDate": {
+      "type": "date"
+    },
+    "reference": {
+      "type": "string"
+    },
+    "items": {
+      "type": "json",
+      "required": true
+    }
+  }
+}

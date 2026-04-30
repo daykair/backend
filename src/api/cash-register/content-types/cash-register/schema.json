@@ -1,0 +1,43 @@
+{
+  "kind": "collectionType",
+  "collectionName": "cash_registers",
+  "info": {
+    "singularName": "cash-register",
+    "pluralName": "cash-registers",
+    "displayName": "Cash Register",
+    "description": "Daily cash register closings"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "date": {
+      "type": "date",
+      "required": true
+    },
+    "totalIncome": {
+      "type": "decimal",
+      "required": true
+    },
+    "totalExpenses": {
+      "type": "decimal",
+      "required": true
+    },
+    "expectedBalance": {
+      "type": "decimal",
+      "required": true
+    },
+    "actualBalance": {
+      "type": "decimal",
+      "required": true
+    },
+    "difference": {
+      "type": "decimal",
+      "required": true
+    },
+    "notes": {
+      "type": "text"
+    }
+  }
+}
