@@ -33,7 +33,20 @@ export default ({ env }) => {
 				? {
 						connectionString: env("DATABASE_URL"),
 						ssl: env.bool("DATABASE_SSL", false)
-							? { rejectUnauthorized: false }
+							? {
+									rejectUnauthorized: env.bool("DATABASE_SSL_REJECT_UNAUTHORIZED", true),
+									ca: (() => {
+										const caPath = env("DATABASE_SSL_CA");
+										if (!caPath) return undefined;
+										const fullPath = path.join(__dirname, '../../', caPath);
+										const fs = require('fs');
+										if (fs.existsSync(fullPath)) {
+											return fs.readFileSync(fullPath, 'utf8');
+										}
+										console.warn(`⚠️ SSL CA certificate not found at ${fullPath}. Connection might fail.`);
+										return undefined;
+									})(),
+							  }
 							: false,
 				  }
 				: {
@@ -45,8 +58,19 @@ export default ({ env }) => {
 						ssl: env.bool("DATABASE_SSL", false) && {
 							rejectUnauthorized: env.bool(
 								"DATABASE_SSL_REJECT_UNAUTHORIZED",
-								false,
+								true,
 							),
+							ca: (() => {
+								const caPath = env("DATABASE_SSL_CA");
+								if (!caPath) return undefined;
+								const fullPath = path.join(__dirname, '../../', caPath);
+								const fs = require('fs');
+								if (fs.existsSync(fullPath)) {
+									return fs.readFileSync(fullPath, 'utf8');
+								}
+								console.warn(`⚠️ SSL CA certificate not found at ${fullPath}. Connection might fail.`);
+								return undefined;
+							})(),
 						},
 						schema: env("DATABASE_SCHEMA", "public"),
 				  },
