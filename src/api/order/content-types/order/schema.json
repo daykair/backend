@@ -84,6 +84,14 @@
     },
     "amountPaid": {
       "type": "decimal"
+    },
+    "performedBy": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "plugin::users-permissions.user"
+    },
+    "exchangeRate": {
+      "type": "decimal"
     }
   }
 }
