@@ -15,6 +15,10 @@
     "slug": {
       "type": "uid"
     },
+    "productCode": {
+      "type": "string",
+      "unique": true
+    },
     "title": {
       "type": "string"
     },
