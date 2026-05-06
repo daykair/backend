@@ -47,5 +47,14 @@ export default {
         middlewares: [isAdminMiddleware],
       },
     },
+    {
+      method: 'POST',
+      path: '/orders-admin/process-full',
+      handler: 'api::order.order.processOrderFull',
+      config: {
+        auth: false,
+        middlewares: [isAdminMiddleware],
+      },
+    },
   ],
 };
