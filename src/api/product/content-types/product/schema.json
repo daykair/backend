@@ -56,7 +56,7 @@
     },
     "price": {
       "required": true,
-      "type": "integer"
+      "type": "decimal"
     },
     "discount": {
       "type": "decimal",
@@ -67,11 +67,11 @@
       "default": false
     },
     "wholesalePrice": {
-      "type": "integer",
+      "type": "decimal",
       "required": true
     },
     "costPrice": {
-      "type": "integer",
+      "type": "decimal",
       "private": true
     }
   }
