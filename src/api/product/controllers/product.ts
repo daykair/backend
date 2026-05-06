@@ -36,13 +36,15 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
         try {
             // 1. Create or Update Product
+            const { id: _pid, documentId: _pdocId, ...cleanProductData } = productData;
+
             if (isNewProduct) {
-                savedProduct = await strapi.documents('api::product.product').create({ data: productData });
+                savedProduct = await strapi.documents('api::product.product').create({ data: cleanProductData });
                 productId = savedProduct.documentId;
             } else {
                 savedProduct = await strapi.documents('api::product.product').update({
                     documentId: productId,
-                    data: productData
+                    data: cleanProductData
                 });
             }
 
