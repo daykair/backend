@@ -11,11 +11,17 @@ export default ({ env }) => ({
           region: env('B2_REGION'),
           endpoint: env('B2_ENDPOINT'),
           forcePathStyle: true,
-        },
-        params: {
-          Bucket: env('B2_BUCKET_NAME'),
+          params: {
+            Bucket: env('B2_BUCKET_NAME'),
+          },
         },
       },
-    }
-  }
+      actionOptions: {
+        upload: {},
+        uploadStream: {},
+        delete: {},
+      },
+    },
+  },
 });
+

@@ -5,10 +5,14 @@
 import { factories } from '@strapi/strapi'
 
 export default factories.createCoreController('api::order.order', ({ strapi }) => ({
-  async findAdmin(ctx) {
+    async findAdmin(ctx) {
         try {
             const orders = await strapi.documents('api::order.order').findMany({
-                ...ctx.query
+                ...ctx.query,
+                populate: {
+                    ...((ctx.query.populate as any) || {}),
+                    performedBy: true
+                }
             })
 
             return ctx.send({ data: orders })
