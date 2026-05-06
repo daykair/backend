@@ -50,13 +50,15 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             if (variantsData && Array.isArray(variantsData) && variantsData.length > 0) {
                 for (const variant of variantsData) {
                     if (variant.id) {
+                        const { id, ...dataToUpdate } = variant;
                         await strapi.documents('api::color.color').update({
                             documentId: variant.id, // Using id as documentId for v5
-                            data: variant
+                            data: dataToUpdate
                         });
                     } else {
+                        const { id, ...dataToCreate } = variant;
                         await strapi.documents('api::color.color').create({
-                            data: { ...variant, product: productId }
+                            data: { ...dataToCreate, product: productId }
                         });
                     }
                 }
