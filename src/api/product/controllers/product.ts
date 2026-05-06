@@ -27,5 +27,52 @@ export default factories.createCoreController('api::product.product', ({ strapi 
         } catch (err) {
             ctx.body = err;
         }
+    },
+    async saveFull(ctx) {
+        const { productData, variantsData } = ctx.request.body.data;
+        let productId = productData.id || productData.documentId;
+        let isNewProduct = !productId;
+        let savedProduct = null;
+
+        try {
+            // 1. Create or Update Product
+            if (isNewProduct) {
+                savedProduct = await strapi.documents('api::product.product').create({ data: productData });
+                productId = savedProduct.documentId;
+            } else {
+                savedProduct = await strapi.documents('api::product.product').update({
+                    documentId: productId,
+                    data: productData
+                });
+            }
+
+            // 2. Create or Update Variants
+            if (variantsData && Array.isArray(variantsData) && variantsData.length > 0) {
+                for (const variant of variantsData) {
+                    if (variant.id) {
+                        await strapi.documents('api::color.color').update({
+                            documentId: variant.id, // Using id as documentId for v5
+                            data: variant
+                        });
+                    } else {
+                        await strapi.documents('api::color.color').create({
+                            data: { ...variant, product: productId }
+                        });
+                    }
+                }
+            }
+
+            return ctx.send({ success: true, data: savedProduct });
+        } catch (error) {
+            // Rollback only if it was a new product creation
+            if (isNewProduct && savedProduct && savedProduct.documentId) {
+                try {
+                    await strapi.documents('api::product.product').delete({ documentId: savedProduct.documentId });
+                } catch (e) {
+                    console.error("Rollback failed:", e);
+                }
+            }
+            return ctx.badRequest('Error saving product and variants' + " " + error.message);
+        }
     }
 }));

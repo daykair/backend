@@ -55,6 +55,15 @@ export default {
                 auth: false,
                 middlewares: [isAdminMiddleware]
             }
+        },
+        {
+            method: 'POST',
+            path: '/products-admin/save-full',
+            handler: 'api::product.product.saveFull',
+            config: {
+                auth: false,
+                middlewares: [isAdminMiddleware]
+            }
         }
     ]
 }
