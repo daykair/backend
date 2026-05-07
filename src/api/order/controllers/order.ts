@@ -27,7 +27,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
             let savedOrder = null;
 
             // 1. Save or Update Order
-            let orderId = orderData.id || orderData.documentId;
+            let orderId = orderData.documentId || orderData.id;
             const { id: _oid, documentId: _odocId, ...cleanOrderData } = orderData;
 
             if (orderId) {
