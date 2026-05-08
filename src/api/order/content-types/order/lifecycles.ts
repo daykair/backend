@@ -71,7 +71,7 @@ async function processOrderItemsCosts(event) {
 }
 
 async function processDeliveryExpense(order) {
-    const reference = `Delivery Order ${order.documentId || order.id}`;
+    const reference = `Delivery de la Orden #${order.id || order.documentId}`;
 
     // Buscar si ya existe un gasto con esa referencia
     const existingExpenses = await strapi.documents('api::expense.expense').findMany({
@@ -80,7 +80,7 @@ async function processDeliveryExpense(order) {
 
     // Si es delivery y la agencia no es "Propio"
     if (order.deliveryMethod === 'delivery' && order.option && order.option !== 'Propio') {
-        const expenseTitle = `[Agregar precio] Delivery - ${order.option} - ${order.adress || 'Sin dirección'}`;
+        const expenseTitle = `Delivery - ${order.option} - ${order.adress || 'Sin dirección'}`;
 
         if (!existingExpenses || existingExpenses.length === 0) {
             // Crear el gasto
