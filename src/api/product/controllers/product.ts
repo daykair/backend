@@ -39,12 +39,16 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             const { id: _pid, documentId: _pdocId, ...cleanProductData } = productData;
 
             if (isNewProduct) {
-                savedProduct = await strapi.documents('api::product.product').create({ data: cleanProductData });
+                savedProduct = await strapi.documents('api::product.product').create({ 
+                    data: cleanProductData,
+                    status: 'published'
+                });
                 productId = savedProduct.documentId;
             } else {
                 savedProduct = await strapi.documents('api::product.product').update({
                     documentId: productId,
-                    data: cleanProductData
+                    data: cleanProductData,
+                    status: 'published'
                 });
             }
 
@@ -70,12 +74,14 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                         const { id, ...dataToUpdate } = variant;
                         await strapi.documents('api::color.color').update({
                             documentId: variant.id,
-                            data: dataToUpdate
+                            data: dataToUpdate,
+                            status: 'published'
                         });
                     } else {
                         const { id, ...dataToCreate } = variant;
                         await strapi.documents('api::color.color').create({
-                            data: { ...dataToCreate, product: productId }
+                            data: { ...dataToCreate, product: productId },
+                            status: 'published'
                         });
                     }
                 }
