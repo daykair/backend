@@ -73,6 +73,10 @@
     "costPrice": {
       "type": "decimal",
       "private": true
+    },
+    "hasVariants": {
+      "type": "boolean",
+      "default": true
     }
   }
 }

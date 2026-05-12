@@ -44,35 +44,34 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
             // 2. Process Stock Adjustments
             if (stockAdjustments && Array.isArray(stockAdjustments) && stockAdjustments.length > 0) {
                 for (const adj of stockAdjustments) {
-                    // Try to find the color by documentId or integer id
-                    let colorEntity = null;
-                    if (typeof adj.colorId === 'string' && isNaN(Number(adj.colorId))) {
-                        colorEntity = await strapi.db.query('api::color.color').findOne({ where: { documentId: adj.colorId } });
-                    } else {
-                        colorEntity = await strapi.db.query('api::color.color').findOne({ where: { id: adj.colorId } });
-                    }
+                    // Fetch color with product to get names for the reason using Document Service (v5)
+                    const colorEntity = await strapi.documents('api::color.color').findOne({ 
+                        documentId: adj.colorId,
+                        populate: ['product']
+                    }) as any;
 
                     if (colorEntity) {
-                        const newStock = adj.type === 'IN' ? colorEntity.stock + adj.quantity : colorEntity.stock - adj.quantity;
+                        // Enrich the reason with product and order details
+                        const productTitle = colorEntity.product?.title || 'Producto';
+                        const colorName = colorEntity.name || 'N/A';
+                        const orderIdentifier = savedOrder.id || savedOrder.documentId;
                         
-                        // Update stock directly using db.query (bypassing REST/draft checks)
-                        await strapi.db.query('api::color.color').update({
-                            where: { id: colorEntity.id },
-                            data: { stock: newStock }
-                        });
+                        const enrichedReason = `${adj.reason.replace('undefined', orderIdentifier)} - Item: ${productTitle} (${colorName})`;
 
-                        // Create inventory movement
+                        // Create inventory movement (Lifecycle will handle the stock update)
                         await strapi.documents('api::inventory-movement.inventory-movement').create({
                             data: {
                                 color: colorEntity.documentId,
                                 quantity: adj.quantity,
                                 type: adj.type,
-                                reason: adj.reason,
+                                reason: enrichedReason,
                                 date: new Date().toISOString(),
                                 performedBy: adj.userId,
                                 exchangeRate: adj.exchangeRate
                             }
                         });
+                    } else {
+                        console.error(`[OrderProcess] Could not find color with ID ${adj.colorId} for stock adjustment`);
                     }
                 }
             }
