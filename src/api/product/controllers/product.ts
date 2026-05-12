@@ -49,12 +49,27 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             }
 
             // 2. Create or Update Variants
+            const currentVariants = await strapi.documents('api::color.color').findMany({
+                filters: { product: productId }
+            });
+
+            const variantsToKeep = variantsData
+                .filter(v => v.id)
+                .map(v => v.id);
+
+            // Delete variants that are no longer in the list
+            const variantsToDelete = currentVariants.filter(cv => !variantsToKeep.includes(cv.documentId));
+            for (const v of variantsToDelete) {
+                await strapi.documents('api::color.color').delete({ documentId: v.documentId });
+            }
+
+            // Create or Update
             if (variantsData && Array.isArray(variantsData) && variantsData.length > 0) {
                 for (const variant of variantsData) {
                     if (variant.id) {
                         const { id, ...dataToUpdate } = variant;
                         await strapi.documents('api::color.color').update({
-                            documentId: variant.id, // Using id as documentId for v5
+                            documentId: variant.id,
                             data: dataToUpdate
                         });
                     } else {
