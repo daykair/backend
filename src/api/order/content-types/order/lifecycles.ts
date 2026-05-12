@@ -88,7 +88,7 @@ async function processDeliveryExpense(order) {
                 data: {
                     title: expenseTitle,
                     amount: 0, // Se inicializa en 0 para que el usuario "Agregue precio"
-                    date: new Date().toISOString().split('T')[0],
+                    date: new Date(Date.now() - 4 * 3600000).toISOString().split('T')[0],
                     category: 'Operaciones',
                     reference: reference
                 },

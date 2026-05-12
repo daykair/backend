@@ -3,12 +3,12 @@ export default {
   async afterCreate(event) {
     const { result } = event;
 
-    // En Strapi 5, las relaciones en el resultado suelen venir como objetos con documentId
-    // o simplemente como el documentId si no se pobló.
-    const colorId = result.color?.documentId || result.color?.id || result.color;
+    // En Strapi 5, las relaciones en el resultado suelen no venir pobladas
+    // por lo que debemos buscar en event.params.data también.
+    const colorId = result.color?.documentId || result.color?.id || result.color || event.params.data?.color;
 
     if (!colorId || result.quantity === undefined) {
-      console.warn('Inventory Movement created without valid color or quantity. Skipping stock update.');
+      console.warn('Inventory Movement created without valid color or quantity. Skipping stock update.', { result, data: event.params.data });
       return;
     }
 
@@ -35,7 +35,8 @@ export default {
       // Esto disparará otros lifecycles de color si existen y manejará estados de publicación
       await strapi.documents('api::color.color').update({
         documentId: colorId,
-        data: { stock: newStock }
+        data: { stock: newStock },
+        status: 'published'
       });
 
       console.log(`[Inventory] Stock updated for Color ${colorId}: ${currentStock} -> ${newStock} (${result.type})`);
