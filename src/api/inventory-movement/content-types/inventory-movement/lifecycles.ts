@@ -11,7 +11,14 @@ export default {
 
     if (rawColor) {
       if (typeof rawColor === 'object') {
-        colorId = rawColor.documentId || rawColor.id;
+        // Manejar estructuras de Strapi 5 como { set: [...] } o { connect: [...] }
+        const wrap = rawColor.set || rawColor.connect;
+        if (wrap) {
+          const first = Array.isArray(wrap) ? wrap[0] : wrap;
+          colorId = typeof first === 'object' ? (first.documentId || first.id) : first;
+        } else {
+          colorId = rawColor.documentId || rawColor.id;
+        }
       } else {
         colorId = rawColor;
       }
