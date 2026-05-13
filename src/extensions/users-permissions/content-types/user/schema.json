@@ -18,6 +18,10 @@
     },
     "ci": {
       "type": "string"
+    },
+    "price_type": {
+      "type": "string",
+      "default": "detal"
     }
   }
 }
