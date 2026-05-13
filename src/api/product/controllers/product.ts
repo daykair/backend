@@ -30,7 +30,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
     },
     async saveFull(ctx) {
         const { productData, variantsData } = ctx.request.body.data;
-        let productId = productData.id || productData.documentId;
+        let productId = productData.documentId || productData.id;
         let isNewProduct = !productId;
         let savedProduct = null;
 
@@ -54,7 +54,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
             // 2. Create or Update Variants
             const currentVariants = await strapi.documents('api::color.color').findMany({
-                filters: { product: productId }
+                filters: { product: { documentId: productId } }
             });
 
             const variantsToKeep = variantsData
@@ -80,7 +80,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     } else {
                         const { id, ...dataToCreate } = variant;
                         await strapi.documents('api::color.color').create({
-                            data: { ...dataToCreate, product: productId },
+                            data: { ...dataToCreate, product: { documentId: productId } },
                             status: 'published'
                         });
                     }
