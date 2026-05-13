@@ -40,33 +40,34 @@ export default {
 async function processInventoryStock(order) {
     // Usamos documentId porque en Strapi 5 el ID numérico puede cambiar entre versiones (draft/published)
     const orderId = order.documentId || order.id;
-    const isCancelled = order.orderStatus === 'cancelled';
+    const isCancelled = order.orderStatus === 'cancelled' || order.orderStatus === 'returned';
     
     // Descontar stock si es un estado activo
     const shouldDeduct = order.orderStatus === 'pending' || order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
     
     // Usamos el documentId en la razón para que sea consistente en todas las versiones del documento
     const saleReason = `Venta automática (Pedido #${orderId})`;
-    const returnReason = `Devolución automática (Cancelación Pedido #${orderId})`;
+    const returnReason = `Devolución automática (Cancelación/Devolución Pedido #${orderId})`;
 
-    // 1. Verificar movimientos existentes usando db.query
-    const existingSale = await strapi.db.query('api::inventory-movement.inventory-movement').findOne({
-        where: { reason: saleReason, type: 'OUT' }
-    });
+    // 1. Verificar movimientos existentes de forma paralela
+    const [existingSale, existingReturn] = await Promise.all([
+        strapi.db.query('api::inventory-movement.inventory-movement').findOne({
+            where: { reason: { $contains: `Pedido #${orderId}` }, type: 'OUT' }
+        }),
+        strapi.db.query('api::inventory-movement.inventory-movement').findOne({
+            where: { reason: { $contains: `Pedido #${orderId}` }, type: 'IN' }
+        })
+    ]);
 
-    const existingReturn = await strapi.db.query('api::inventory-movement.inventory-movement').findOne({
-        where: { reason: returnReason, type: 'IN' }
-    });
-
-    // CASO A: Cancelación (Devolver stock si se había descontado antes y no se ha devuelto ya)
+    // CASO A: Cancelación/Devolución (Devolver stock si se había descontado antes y no se ha devuelto ya)
     if (isCancelled && existingSale && !existingReturn) {
         let items = order.order;
         if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
         
         if (Array.isArray(items)) {
-            for (const item of items) {
+            const promises = items.map(item => {
                 if (item.colorId) {
-                    await strapi.documents('api::inventory-movement.inventory-movement').create({
+                    return strapi.documents('api::inventory-movement.inventory-movement').create({
                         data: {
                             color: item.colorId,
                             quantity: Number(item.quantity),
@@ -78,7 +79,9 @@ async function processInventoryStock(order) {
                         }
                     });
                 }
-            }
+                return null;
+            }).filter(Boolean);
+            await Promise.all(promises);
         }
         return;
     }
@@ -89,9 +92,9 @@ async function processInventoryStock(order) {
         if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
 
         if (Array.isArray(items)) {
-            for (const item of items) {
+            const promises = items.map(item => {
                 if (item.colorId) {
-                    await strapi.documents('api::inventory-movement.inventory-movement').create({
+                    return strapi.documents('api::inventory-movement.inventory-movement').create({
                         data: {
                             color: item.colorId,
                             quantity: Number(item.quantity),
@@ -103,7 +106,9 @@ async function processInventoryStock(order) {
                         }
                     });
                 }
-            }
+                return null;
+            }).filter(Boolean);
+            await Promise.all(promises);
         }
     }
 }
@@ -122,25 +127,32 @@ async function processOrderItemsCosts(event) {
         }
 
         if (Array.isArray(items)) {
-            // Buscamos los costos actuales de los productos uno por uno
-            for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                if (item.productId && typeof item.unitCost === 'undefined') {
-                    try {
-                        const product = await strapi.documents('api::product.product').findOne({
-                            documentId: item.productId.toString()
-                        });
+            // Recolectar todos los IDs de productos que necesitan costo
+            const productIds = [...new Set(items
+                .filter(item => item.productId && typeof item.unitCost === 'undefined')
+                .map(item => item.productId.toString())
+            )];
 
-                        if (product) {
-                            item.unitCost = product.costPrice || 0;
-                        } else {
-                            item.unitCost = 0;
-                        }
-                    } catch (error) {
-                        item.unitCost = 0;
+            if (productIds.length > 0) {
+                // Buscar todos los productos de una sola vez usando db.query para evitar errores de tipos con documentId
+                const products = await strapi.db.query('api::product.product').findMany({
+                    where: { documentId: { $in: productIds } },
+                    select: ['documentId', 'costPrice']
+                });
+
+                const costMap = products.reduce((acc, p) => {
+                    acc[p.documentId] = p.costPrice || 0;
+                    return acc;
+                }, {});
+
+                // Asignar costos
+                items.forEach(item => {
+                    if (item.productId && typeof item.unitCost === 'undefined') {
+                        item.unitCost = costMap[item.productId.toString()] || 0;
                     }
-                }
+                });
             }
+
             if (typeof data.order === 'string') {
                 event.params.data.order = JSON.stringify(items);
             } else {

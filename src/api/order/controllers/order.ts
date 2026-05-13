@@ -67,38 +67,6 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
                     });
                 }
 
-                // 2. Process Stock Adjustments
-                if (stockAdjustments && Array.isArray(stockAdjustments) && stockAdjustments.length > 0) {
-                    for (const adj of stockAdjustments) {
-                        const colorEntity = await strapi.documents('api::color.color').findOne({ 
-                            documentId: adj.colorId,
-                            populate: ['product']
-                        }) as any;
-
-                        if (!colorEntity) {
-                            throw new Error(`Color con ID ${adj.colorId} no encontrado. Abortando para mantener consistencia.`);
-                        }
-
-                        const productTitle = colorEntity.product?.title || 'Producto';
-                        const colorName = colorEntity.name || 'N/A';
-                        const orderIdentifier = savedOrder.id || savedOrder.documentId;
-                        
-                        const enrichedReason = `${adj.reason.replace('undefined', orderIdentifier)} - Item: ${productTitle} (${colorName})`;
-
-                        await strapi.documents('api::inventory-movement.inventory-movement').create({
-                            data: {
-                                color: colorEntity.documentId,
-                                quantity: adj.quantity,
-                                type: adj.type,
-                                reason: enrichedReason,
-                                date: getStandardISO(),
-                                performedBy: adj.userId,
-                                exchangeRate: adj.exchangeRate
-                            }
-                        });
-                    }
-                }
-
                 return { data: savedOrder };
             } catch (err) {
                 console.error("[OrderProcess] Error en transacción:", err);

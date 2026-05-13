@@ -69,14 +69,16 @@ export default {
         ? currentStock + movementQty 
         : currentStock - movementQty;
 
-      // 5. Actualizar el stock de forma segura usando el Document Service
-      // Esto asegura que tanto el borrador como la versión publicada se actualicen.
-      await strapi.documents('api::color.color').update({
-        documentId: effectiveDocumentId,
+      // 5. Actualizar el stock de forma rápida y segura usando db.query
+      // Usamos db.query para actualizar directamente la fila en la DB.
+      // Esto evita el estado "Modified" en el panel y previene bucles infinitos de lifecycles.
+      // Al filtrar por documentId, Strapi actualiza tanto el borrador como la versión publicada.
+      await strapi.db.query('api::color.color').update({
+        where: { documentId: effectiveDocumentId },
         data: { stock: newStock }
       });
 
-      console.log(`[Inventory] Stock actualizado para ${effectiveDocumentId}: ${currentStock} -> ${newStock} (${result.type})`);
+      console.log(`[Inventory] Stock actualizado vía db.query para ${effectiveDocumentId}: ${currentStock} -> ${newStock} (${result.type})`);
     } catch (error) {
       console.error('[Inventory] Error crítico en lifecycle afterCreate:', error);
     }
