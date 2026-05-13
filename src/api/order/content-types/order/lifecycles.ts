@@ -1,5 +1,10 @@
 export default {
     async beforeCreate(event) {
+        const { data } = event.params;
+        // Establecer fecha de pedido si no viene
+        if (!data.orderPlaced) {
+            data.orderPlaced = new Date().toISOString();
+        }
         await processOrderItemsCosts(event);
     },
     async beforeUpdate(event) {
@@ -20,18 +25,23 @@ export default {
 async function processInventoryStock(order) {
     const orderId = order.id || order.documentId;
     const isCancelled = order.orderStatus === 'cancelled';
-    const shouldDeduct = order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
+    // Descontar stock si es un estado activo (incluyendo pending para apartar stock en pedidos manuales)
+    const shouldDeduct = order.orderStatus === 'pending' || order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
     
-    // 1. Verificar si ya existen movimientos para esta orden
-    const existingMovements = await strapi.documents('api::inventory-movement.inventory-movement').findMany({
-        filters: { reason: { $containsi: `Pedido #${orderId}` } }
+    // 1. Verificar movimientos existentes usando db.query para mayor precisión en tiempo real
+    const saleReason = `Venta automática (Pedido #${orderId})`;
+    const returnReason = `Devolución automática (Cancelación Pedido #${orderId})`;
+
+    const existingSale = await strapi.db.query('api::inventory-movement.inventory-movement').findOne({
+        where: { reason: saleReason, type: 'OUT' }
     });
 
-    const hasOutMovements = existingMovements && existingMovements.some(m => m.type === 'OUT');
-    const hasInMovements = existingMovements && existingMovements.some(m => m.type === 'IN');
+    const existingReturn = await strapi.db.query('api::inventory-movement.inventory-movement').findOne({
+        where: { reason: returnReason, type: 'IN' }
+    });
 
-    // CASO A: Cancelación (Devolver stock si se había descontado antes)
-    if (isCancelled && hasOutMovements && !hasInMovements) {
+    // CASO A: Cancelación (Devolver stock si se había descontado antes y no se ha devuelto ya)
+    if (isCancelled && existingSale && !existingReturn) {
         let items = order.order;
         if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
         
@@ -43,7 +53,7 @@ async function processInventoryStock(order) {
                             color: item.colorId,
                             quantity: Number(item.quantity),
                             type: 'IN',
-                            reason: `Devolución automática (Cancelación Pedido #${orderId})`,
+                            reason: returnReason,
                             exchangeRate: order.exchangeRate || 1,
                             performedBy: order.performedBy?.id || order.performedBy || null,
                             date: new Date().toISOString()
@@ -56,7 +66,7 @@ async function processInventoryStock(order) {
     }
 
     // CASO B: Descuento de stock (Solo si aplica y no se ha hecho antes)
-    if (shouldDeduct && !hasOutMovements) {
+    if (shouldDeduct && !existingSale) {
         let items = order.order;
         if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
 
@@ -68,7 +78,7 @@ async function processInventoryStock(order) {
                             color: item.colorId,
                             quantity: Number(item.quantity),
                             type: 'OUT',
-                            reason: `Venta automática (Pedido #${orderId})`,
+                            reason: saleReason,
                             exchangeRate: order.exchangeRate || 1,
                             performedBy: order.performedBy?.id || order.performedBy || null,
                             date: new Date().toISOString()
