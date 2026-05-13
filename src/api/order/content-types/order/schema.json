@@ -92,6 +92,9 @@
     },
     "exchangeRate": {
       "type": "decimal"
+    },
+    "payments": {
+      "type": "json"
     }
   }
 }

@@ -59,6 +59,9 @@
     "items": {
       "type": "json",
       "required": true
+    },
+    "payments": {
+      "type": "json"
     }
   }
 }

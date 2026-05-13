@@ -33,12 +33,22 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
                 const { id: _oid, documentId: _odocId, ...cleanOrderData } = orderData;
 
                 if (orderId) {
+                    // Sincronizar monto pagado si vienen multipagos
+                    if (cleanOrderData.payments && Array.isArray(cleanOrderData.payments)) {
+                        cleanOrderData.amountPaid = cleanOrderData.payments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+                    }
+
                     savedOrder = await strapi.documents('api::purchase-order.purchase-order').update({
                         documentId: orderId,
                         data: cleanOrderData,
                         status: 'published'
                     });
                 } else {
+                    // Sincronizar monto pagado si vienen multipagos
+                    if (cleanOrderData.payments && Array.isArray(cleanOrderData.payments)) {
+                        cleanOrderData.amountPaid = cleanOrderData.payments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+                    }
+
                     savedOrder = await strapi.documents('api::purchase-order.purchase-order').create({
                         data: {
                             ...cleanOrderData,

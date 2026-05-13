@@ -36,12 +36,28 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
                 const { id: _oid, documentId: _odocId, ...cleanOrderData } = orderData;
 
                 if (orderId) {
+                    // Sincronizar monto pagado si vienen multipagos
+                    if (cleanOrderData.payments && Array.isArray(cleanOrderData.payments)) {
+                        cleanOrderData.amountPaid = cleanOrderData.payments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+                        if (cleanOrderData.payments.length > 0) {
+                            cleanOrderData.method = cleanOrderData.payments.length > 1 ? "Múltiple" : cleanOrderData.payments[0].method;
+                        }
+                    }
+
                     savedOrder = await strapi.documents('api::order.order').update({
                         documentId: orderId,
                         data: cleanOrderData,
                         status: 'published'
                     });
                 } else {
+                    // Sincronizar monto pagado si vienen multipagos
+                    if (cleanOrderData.payments && Array.isArray(cleanOrderData.payments)) {
+                        cleanOrderData.amountPaid = cleanOrderData.payments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+                        if (cleanOrderData.payments.length > 0) {
+                            cleanOrderData.method = cleanOrderData.payments.length > 1 ? "Múltiple" : cleanOrderData.payments[0].method;
+                        }
+                    }
+
                     savedOrder = await strapi.documents('api::order.order').create({
                         data: {
                             ...cleanOrderData,
