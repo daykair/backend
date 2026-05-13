@@ -18,21 +18,17 @@ export default {
 };
 
 async function processInventoryStock(order) {
-    if (!order) return;
     const orderId = order.id || order.documentId;
-    if (!orderId) return;
-
     const isCancelled = order.orderStatus === 'cancelled';
     const shouldDeduct = order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
     
     // 1. Verificar si ya existen movimientos para esta orden
-    // Usamos db.query que a veces es más rápido para filtros simples en lifecycles
-    const existingMovements = await strapi.db.query('api::inventory-movement.inventory-movement').findMany({
-        where: { reason: { $contains: `Pedido #${orderId}` } }
+    const existingMovements = await strapi.documents('api::inventory-movement.inventory-movement').findMany({
+        filters: { reason: { $containsi: `Pedido #${orderId}` } }
     });
 
-    const hasOutMovements = existingMovements.some(m => m.type === 'OUT');
-    const hasInMovements = existingMovements.some(m => m.type === 'IN');
+    const hasOutMovements = existingMovements && existingMovements.some(m => m.type === 'OUT');
+    const hasInMovements = existingMovements && existingMovements.some(m => m.type === 'IN');
 
     // CASO A: Cancelación (Devolver stock si se había descontado antes)
     if (isCancelled && hasOutMovements && !hasInMovements) {
@@ -67,21 +63,17 @@ async function processInventoryStock(order) {
         if (Array.isArray(items)) {
             for (const item of items) {
                 if (item.colorId) {
-                    try {
-                        await strapi.documents('api::inventory-movement.inventory-movement').create({
-                            data: {
-                                color: item.colorId,
-                                quantity: Number(item.quantity),
-                                type: 'OUT',
-                                reason: `Venta automática (Pedido #${orderId})`,
-                                exchangeRate: order.exchangeRate || 1,
-                                performedBy: order.performedBy || null,
-                                date: new Date().toISOString()
-                            }
-                        });
-                    } catch (error) {
-                        console.error(`Error al descontar stock para item ${item.colorId} en pedido #${orderId}`, error);
-                    }
+                    await strapi.documents('api::inventory-movement.inventory-movement').create({
+                        data: {
+                            color: item.colorId,
+                            quantity: Number(item.quantity),
+                            type: 'OUT',
+                            reason: `Venta automática (Pedido #${orderId})`,
+                            exchangeRate: order.exchangeRate || 1,
+                            performedBy: order.performedBy || null,
+                            date: new Date().toISOString()
+                        }
+                    });
                 }
             }
         }
@@ -94,46 +86,33 @@ async function processOrderItemsCosts(event) {
     if (data && data.order) {
         let items = data.order;
         if (typeof items === 'string') {
-            try { items = JSON.parse(items); } catch (e) { return; }
+            try {
+                items = JSON.parse(items);
+            } catch (e) {
+                // Ignorar error de parseo
+            }
         }
 
         if (Array.isArray(items)) {
-            // 1. Recolectar IDs
-            const productIds = items
-                .filter(item => item.productId && typeof item.unitCost === 'undefined')
-                .map(item => item.productId.toString());
+            // Buscamos los costos actuales de los productos uno por uno
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.productId && typeof item.unitCost === 'undefined') {
+                    try {
+                        const product = await strapi.documents('api::product.product').findOne({
+                            documentId: item.productId.toString()
+                        });
 
-            if (productIds.length > 0) {
-                try {
-                    // 2. Buscar productos
-                    const products = await strapi.db.query('api::product.product').findMany({
-                        where: {
-                            $or: [
-                                { id: { $in: productIds.filter(id => !isNaN(Number(id))).map(Number) } },
-                                { documentId: { $in: productIds.filter(id => isNaN(Number(id))) } }
-                            ]
-                        },
-                        select: ['id', 'documentId', 'costPrice']
-                    });
-
-                    // 3. Mapa de costos
-                    const costMap: Record<string, number> = {};
-                    products.forEach(p => {
-                        if (p.id) costMap[p.id.toString()] = p.costPrice || 0;
-                        if (p.documentId) costMap[p.documentId] = p.costPrice || 0;
-                    });
-
-                    // 4. Asignar
-                    items.forEach(item => {
-                        if (item.productId && typeof item.unitCost === 'undefined') {
-                            item.unitCost = costMap[item.productId.toString()] || 0;
+                        if (product) {
+                            item.unitCost = product.costPrice || 0;
+                        } else {
+                            item.unitCost = 0;
                         }
-                    });
-                } catch (error) {
-                    console.error("Error batch fetching costs", error);
+                    } catch (error) {
+                        item.unitCost = 0;
+                    }
                 }
             }
-
             if (typeof data.order === 'string') {
                 event.params.data.order = JSON.stringify(items);
             } else {
@@ -144,12 +123,11 @@ async function processOrderItemsCosts(event) {
 }
 
 async function processDeliveryExpense(order) {
-    if (!order) return;
-    const orderId = order.id || order.documentId;
-    const reference = `Delivery de la Orden #${orderId}`;
+    const reference = `Delivery de la Orden #${order.id || order.documentId}`;
 
-    const existingExpenses = await strapi.db.query('api::expense.expense').findMany({
-        where: { reference: reference }
+    // Buscar si ya existe un gasto con esa referencia
+    const existingExpenses = await strapi.documents('api::expense.expense').findMany({
+        filters: { reference: { $eq: reference } }
     });
 
     if (order.deliveryMethod === 'delivery' && order.option && order.option !== 'Propio') {
@@ -168,15 +146,19 @@ async function processDeliveryExpense(order) {
         } else {
             const expense = existingExpenses[0];
             await strapi.documents('api::expense.expense').update({
-                documentId: expense.documentId || expense.id,
-                data: { title: expenseTitle }
+                documentId: expense.documentId,
+                data: {
+                    title: expenseTitle,
+                }
             });
         }
-    } else if (existingExpenses && existingExpenses.length > 0) {
-        for (const exp of existingExpenses) {
-            await strapi.documents('api::expense.expense').delete({
-                documentId: exp.documentId || exp.id
-            });
+    } else {
+        if (existingExpenses && existingExpenses.length > 0) {
+            for (const exp of existingExpenses) {
+                await strapi.documents('api::expense.expense').delete({
+                    documentId: exp.documentId
+                });
+            }
         }
     }
 }
