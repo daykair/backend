@@ -102,17 +102,24 @@ export default factories.createCoreController('api::product.product', ({ strapi 
     },
     async publishAllColors(ctx) {
         try {
-            const colors = await strapi.documents('api::color.color').findMany({
-                status: 'draft',
-                limit: -1
+            // Usamos db.query para asegurar que encontramos todos los que no tienen fecha de publicación
+            const colors = await strapi.db.query('api::color.color').findMany({
+                where: {
+                    published_at: null
+                },
+                select: ['documentId']
             });
 
             let count = 0;
             for (const color of colors) {
-                await strapi.documents('api::color.color').publish({
-                    documentId: color.documentId
-                });
-                count++;
+                try {
+                    await strapi.documents('api::color.color').publish({
+                        documentId: color.documentId
+                    });
+                    count++;
+                } catch (e) {
+                    console.error(`Error publicando ${color.documentId}:`, e.message);
+                }
             }
 
             return ctx.send({ success: true, message: `${count} colores publicados.` });
