@@ -90,6 +90,11 @@
       "relation": "manyToOne",
       "target": "plugin::users-permissions.user"
     },
+    "customer": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "plugin::users-permissions.user"
+    },
     "exchangeRate": {
       "type": "decimal"
     },
