@@ -22,9 +22,9 @@ async function processInventoryStock(order) {
     const isCancelled = order.orderStatus === 'cancelled';
     const shouldDeduct = order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
     
-    // 1. Verificar si ya existen movimientos para esta orden
-    const existingMovements = await strapi.documents('api::inventory-movement.inventory-movement').findMany({
-        filters: { reason: { $containsi: `Pedido #${orderId}` } }
+    // 1. Verificar si ya existen movimientos para esta orden usando db.query
+    const existingMovements = await strapi.db.query('api::inventory-movement.inventory-movement').findMany({
+        where: { reason: { $contains: `Pedido #${orderId}` } }
     });
 
     const hasOutMovements = existingMovements && existingMovements.some(m => m.type === 'OUT');
@@ -38,14 +38,14 @@ async function processInventoryStock(order) {
         if (Array.isArray(items)) {
             for (const item of items) {
                 if (item.colorId) {
-                    await strapi.documents('api::inventory-movement.inventory-movement').create({
+                    await strapi.db.query('api::inventory-movement.inventory-movement').create({
                         data: {
                             color: item.colorId,
                             quantity: Number(item.quantity),
                             type: 'IN',
                             reason: `Devolución automática (Cancelación Pedido #${orderId})`,
                             exchangeRate: order.exchangeRate || 1,
-                            performedBy: order.performedBy || null,
+                            performedBy: order.performedBy?.id || order.performedBy || null,
                             date: new Date().toISOString()
                         }
                     });
@@ -63,14 +63,14 @@ async function processInventoryStock(order) {
         if (Array.isArray(items)) {
             for (const item of items) {
                 if (item.colorId) {
-                    await strapi.documents('api::inventory-movement.inventory-movement').create({
+                    await strapi.db.query('api::inventory-movement.inventory-movement').create({
                         data: {
                             color: item.colorId,
                             quantity: Number(item.quantity),
                             type: 'OUT',
                             reason: `Venta automática (Pedido #${orderId})`,
                             exchangeRate: order.exchangeRate || 1,
-                            performedBy: order.performedBy || null,
+                            performedBy: order.performedBy?.id || order.performedBy || null,
                             date: new Date().toISOString()
                         }
                     });
@@ -99,8 +99,13 @@ async function processOrderItemsCosts(event) {
                 const item = items[i];
                 if (item.productId && typeof item.unitCost === 'undefined') {
                     try {
-                        const product = await strapi.documents('api::product.product').findOne({
-                            documentId: item.productId.toString()
+                        const product = await strapi.db.query('api::product.product').findOne({
+                            where: { 
+                                $or: [
+                                    { documentId: item.productId.toString() },
+                                    { id: !isNaN(Number(item.productId)) ? Number(item.productId) : -1 }
+                                ]
+                            }
                         });
 
                         if (product) {
@@ -123,18 +128,19 @@ async function processOrderItemsCosts(event) {
 }
 
 async function processDeliveryExpense(order) {
-    const reference = `Delivery de la Orden #${order.id || order.documentId}`;
+    const orderId = order.id || order.documentId;
+    const reference = `Delivery de la Orden #${orderId}`;
 
-    // Buscar si ya existe un gasto con esa referencia
-    const existingExpenses = await strapi.documents('api::expense.expense').findMany({
-        filters: { reference: { $eq: reference } }
+    // Buscar si ya existe un gasto con esa referencia usando db.query
+    const existingExpenses = await strapi.db.query('api::expense.expense').findMany({
+        where: { reference: reference }
     });
 
     if (order.deliveryMethod === 'delivery' && order.option && order.option !== 'Propio') {
         const expenseTitle = `Delivery - ${order.option} - ${order.adress || 'Sin dirección'}`;
 
         if (!existingExpenses || existingExpenses.length === 0) {
-            await strapi.documents('api::expense.expense').create({
+            await strapi.db.query('api::expense.expense').create({
                 data: {
                     title: expenseTitle,
                     amount: 0,
@@ -145,8 +151,8 @@ async function processDeliveryExpense(order) {
             });
         } else {
             const expense = existingExpenses[0];
-            await strapi.documents('api::expense.expense').update({
-                documentId: expense.documentId,
+            await strapi.db.query('api::expense.expense').update({
+                where: { id: expense.id },
                 data: {
                     title: expenseTitle,
                 }
@@ -155,8 +161,8 @@ async function processDeliveryExpense(order) {
     } else {
         if (existingExpenses && existingExpenses.length > 0) {
             for (const exp of existingExpenses) {
-                await strapi.documents('api::expense.expense').delete({
-                    documentId: exp.documentId
+                await strapi.db.query('api::expense.expense').delete({
+                    where: { id: exp.id }
                 });
             }
         }
