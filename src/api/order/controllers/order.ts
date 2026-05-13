@@ -28,7 +28,8 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
                 let savedOrder = null;
 
                 // Aux para fecha Caracas (UTC-4)
-                const getCaracasISO = () => new Date(Date.now() - 4 * 3600000).toISOString();
+                // Usamos UTC estándar para evitar desfases (el front se encarga de la zona horaria)
+                const getStandardISO = () => new Date().toISOString();
 
                 // 1. Save or Update Order
                 let orderId = orderData.documentId || orderData.id;
@@ -44,7 +45,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
                     savedOrder = await strapi.documents('api::order.order').create({
                         data: {
                             ...cleanOrderData,
-                            orderPlaced: getCaracasISO() // Aseguramos que la fecha de creación sea Caracas
+                            orderPlaced: getStandardISO() // Aseguramos que la fecha de creación sea UTC
                         },
                         status: 'published'
                     });
@@ -74,7 +75,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
                                 quantity: adj.quantity,
                                 type: adj.type,
                                 reason: enrichedReason,
-                                date: getCaracasISO(),
+                                date: getStandardISO(),
                                 performedBy: adj.userId,
                                 exchangeRate: adj.exchangeRate
                             }

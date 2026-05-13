@@ -73,7 +73,7 @@ export default {
       await strapi.documents('api::color.color').update({
         documentId: effectiveDocumentId,
         data: { stock: newStock },
-        status: color.publishedAt ? 'published' : 'draft'
+        status: 'published'
       });
 
       console.log(`[Inventory] Stock actualizado para ${effectiveDocumentId}: ${currentStock} -> ${newStock} (${result.type})`);
