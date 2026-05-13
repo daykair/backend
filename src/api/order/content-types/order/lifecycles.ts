@@ -8,6 +8,16 @@ export default {
         await processOrderItemsCosts(event);
     },
     async beforeUpdate(event) {
+        // Capturar el estado anterior para detectar cambios de estado
+        const { where } = event.params;
+        if (where && (where.id || where.documentId)) {
+            const existing = await strapi.db.query('api::order.order').findOne({ 
+                where: where.id ? { id: where.id } : { documentId: where.documentId }
+            });
+            if (existing) {
+                event.state = { previousStatus: existing.orderStatus };
+            }
+        }
         await processOrderItemsCosts(event);
     },
     async afterCreate(event) {
@@ -16,22 +26,30 @@ export default {
         await processInventoryStock(result);
     },
     async afterUpdate(event) {
-        const { result } = event;
+        const { result, state } = event;
+        const previousStatus = state?.previousStatus;
+        
+        // Solo procesar stock si el estado ha cambiado
+        if (result.orderStatus !== previousStatus) {
+            await processInventoryStock(result);
+        }
         await processDeliveryExpense(result);
-        await processInventoryStock(result);
     }
 };
 
 async function processInventoryStock(order) {
-    const orderId = order.id || order.documentId;
+    // Usamos documentId porque en Strapi 5 el ID numérico puede cambiar entre versiones (draft/published)
+    const orderId = order.documentId || order.id;
     const isCancelled = order.orderStatus === 'cancelled';
-    // Descontar stock si es un estado activo (incluyendo pending para apartar stock en pedidos manuales)
+    
+    // Descontar stock si es un estado activo
     const shouldDeduct = order.orderStatus === 'pending' || order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
     
-    // 1. Verificar movimientos existentes usando db.query para mayor precisión en tiempo real
+    // Usamos el documentId en la razón para que sea consistente en todas las versiones del documento
     const saleReason = `Venta automática (Pedido #${orderId})`;
     const returnReason = `Devolución automática (Cancelación Pedido #${orderId})`;
 
+    // 1. Verificar movimientos existentes usando db.query
     const existingSale = await strapi.db.query('api::inventory-movement.inventory-movement').findOne({
         where: { reason: saleReason, type: 'OUT' }
     });
