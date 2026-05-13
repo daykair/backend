@@ -7,7 +7,17 @@ export default {
    *
    * This gives you an opportunity to extend code.
    */
-  register(/* { strapi }: { strapi: Core.Strapi } */) {},
+  register({ strapi }) {
+    const userAttributes = strapi.contentType('plugin::users-permissions.user').attributes;
+    
+    userAttributes.fullname = { type: 'string' };
+    userAttributes.phone = { type: 'string' };
+    userAttributes.address = { type: 'string' };
+    userAttributes.city = { type: 'string' };
+    userAttributes.state = { type: 'string' };
+    userAttributes.ci = { type: 'string' };
+    userAttributes.price_type = { type: 'string', default: 'detal' };
+  },
 
   /**
    * An asynchronous bootstrap function that runs before
