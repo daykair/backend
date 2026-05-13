@@ -54,7 +54,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
             // 2. Create or Update Variants
             const currentVariants = await strapi.documents('api::color.color').findMany({
-                filters: { product: { documentId: productId } }
+                filters: { product: { documentId: productId } } as any
             });
 
             const variantsToKeep = variantsData
@@ -80,7 +80,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     } else {
                         const { id, ...dataToCreate } = variant;
                         await strapi.documents('api::color.color').create({
-                            data: { ...dataToCreate, product: { documentId: productId } },
+                            data: { ...dataToCreate, product: productId },
                             status: 'published'
                         });
                     }
@@ -98,6 +98,26 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 }
             }
             return ctx.badRequest('Error saving product and variants' + " " + error.message);
+        }
+    },
+    async publishAllColors(ctx) {
+        try {
+            const colors = await strapi.documents('api::color.color').findMany({
+                status: 'draft',
+                limit: -1
+            });
+
+            let count = 0;
+            for (const color of colors) {
+                await strapi.documents('api::color.color').publish({
+                    documentId: color.documentId
+                });
+                count++;
+            }
+
+            return ctx.send({ success: true, message: `${count} colores publicados.` });
+        } catch (err) {
+            return ctx.badRequest('Error publicando colores: ' + err.message);
         }
     }
 }));
