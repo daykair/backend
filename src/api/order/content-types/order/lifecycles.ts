@@ -8,12 +8,81 @@ export default {
     async afterCreate(event) {
         const { result } = event;
         await processDeliveryExpense(result);
+        await processInventoryStock(result);
     },
     async afterUpdate(event) {
         const { result } = event;
         await processDeliveryExpense(result);
+        await processInventoryStock(result);
     }
 };
+
+async function processInventoryStock(order) {
+    const orderId = order.id || order.documentId;
+    const isCancelled = order.orderStatus === 'cancelled';
+    const shouldDeduct = order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
+    
+    // 1. Verificar si ya existen movimientos para esta orden
+    const existingMovements = await strapi.documents('api::inventory-movement.inventory-movement').findMany({
+        filters: { reason: { $containsi: `Pedido #${orderId}` } }
+    });
+
+    const hasOutMovements = existingMovements.some(m => m.type === 'OUT');
+    const hasInMovements = existingMovements.some(m => m.type === 'IN');
+
+    // CASO A: Cancelación (Devolver stock si se había descontado antes)
+    if (isCancelled && hasOutMovements && !hasInMovements) {
+        let items = order.order;
+        if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
+        
+        if (Array.isArray(items)) {
+            for (const item of items) {
+                if (item.colorId) {
+                    await strapi.documents('api::inventory-movement.inventory-movement').create({
+                        data: {
+                            color: item.colorId,
+                            quantity: Number(item.quantity),
+                            type: 'IN',
+                            reason: `Devolución automática (Cancelación Pedido #${orderId})`,
+                            exchangeRate: order.exchangeRate || 1,
+                            performedBy: order.performedBy || null,
+                            date: new Date().toISOString()
+                        }
+                    });
+                }
+            }
+        }
+        return;
+    }
+
+    // CASO B: Descuento de stock (Solo si aplica y no se ha hecho antes)
+    if (shouldDeduct && !hasOutMovements) {
+        let items = order.order;
+        if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
+
+        if (Array.isArray(items)) {
+            for (const item of items) {
+                if (item.colorId) {
+                    try {
+                        await strapi.documents('api::inventory-movement.inventory-movement').create({
+                            data: {
+                                color: item.colorId,
+                                quantity: Number(item.quantity),
+                                type: 'OUT',
+                                reason: `Venta automática (Pedido #${orderId})`,
+                                exchangeRate: order.exchangeRate || 1,
+                                performedBy: order.performedBy || null,
+                                date: new Date().toISOString()
+                            }
+                        });
+                    } catch (error) {
+                        console.error(`Error al descontar stock para item ${item.colorId} en pedido #${orderId}`, error);
+                    }
+                }
+            }
+        }
+    }
+}
 
 async function processOrderItemsCosts(event) {
     const { data } = event.params;
