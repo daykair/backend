@@ -1,29 +1,11 @@
 
 export default {
     async afterCreate(event) {
-        const { result } = event;
-        if (result.documentId) {
-            try {
-                await strapi.documents('api::color.color').publish({
-                    documentId: result.documentId
-                });
-                console.log(`[Color Lifecycle] Autopublicado tras creación: ${result.documentId}`);
-            } catch (err) {
-                // Silencioso si ya está publicado o hay error
-            }
-        }
+        // El color se crea como borrador por defecto en Strapi 5
+        // Se recomienda publicarlo manualmente o mediante una acción controlada
     },
     async afterUpdate(event) {
-        const { result } = event;
-        if (result.documentId) {
-            try {
-                await strapi.documents('api::color.color').publish({
-                    documentId: result.documentId
-                });
-                console.log(`[Color Lifecycle] Autopublicado tras actualización: ${result.documentId}`);
-            } catch (err) {
-                // Silencioso
-            }
-        }
+        // No auto-publicar aquí para evitar bloqueos de transacción (Deadlocks)
+        // en operaciones masivas de inventario.
     }
 };

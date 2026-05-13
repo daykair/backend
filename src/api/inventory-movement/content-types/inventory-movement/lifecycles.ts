@@ -69,19 +69,14 @@ export default {
         ? currentStock + movementQty 
         : currentStock - movementQty;
 
-      // 5. Actualizar el stock
-      await strapi.documents('api::color.color').update({
-        documentId: effectiveDocumentId,
-        data: { stock: newStock },
-        status: 'published'
+      // 5. Actualizar el stock de forma rápida y segura
+      // Usamos db.query para evitar el deadlock del Document Service en Strapi 5
+      await strapi.db.query('api::color.color').update({
+        where: { documentId: effectiveDocumentId },
+        data: { stock: newStock }
       });
 
-      // 6. Forzar publicación (Asegura que el borrador pase a estar disponible públicamente)
-      await strapi.documents('api::color.color').publish({
-        documentId: effectiveDocumentId
-      });
-
-      console.log(`[Inventory] Stock actualizado y PUBLICADO para ${effectiveDocumentId}: ${currentStock} -> ${newStock} (${result.type})`);
+      console.log(`[Inventory] Stock actualizado vía db.query para ${effectiveDocumentId}: ${currentStock} -> ${newStock} (${result.type})`);
     } catch (error) {
       console.error('[Inventory] Error crítico en lifecycle afterCreate:', error);
     }
