@@ -73,5 +73,96 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
                 ctx.throw(500, err.message || "Error al procesar el pedido e inventario");
             }
         });
+    },
+
+    async auditData(ctx) {
+        try {
+            const results: any = {
+                ordersWithoutMovements: [],
+                movementsWithoutColor: [],
+                movementsWithoutProduct: [],
+                stockDiscrepancies: [],
+                productsMissingDefaultColor: []
+            };
+
+            // 1. Órdenes sin movimientos (excluyendo canceladas)
+            const activeOrders = await strapi.documents('api::order.order').findMany({
+                filters: { orderStatus: { $notIn: ['cancelled', 'returned'] } }
+            });
+
+            for (const order of activeOrders) {
+                const movements = await strapi.db.query('api::inventory-movement.inventory-movement').findMany({
+                    where: { reason: { $contains: `Pedido #${order.documentId || order.id}` } }
+                });
+
+                if (movements.length === 0) {
+                    results.ordersWithoutMovements.push({
+                        id: order.id,
+                        documentId: order.documentId,
+                        client: order.clientName,
+                        date: order.createdAt
+                    });
+                }
+            }
+
+            // 2. Movimientos huérfanos
+            const movements = await strapi.documents('api::inventory-movement.inventory-movement').findMany({
+                populate: ['color', 'color.product']
+            });
+
+            for (const mov of movements) {
+                if (!mov.color) {
+                    results.movementsWithoutColor.push(mov.id);
+                } else if (!mov.color.product) {
+                    results.movementsWithoutProduct.push({
+                        movementId: mov.id,
+                        colorName: mov.color.name,
+                        colorId: mov.color.documentId
+                    });
+                }
+            }
+
+            // 3. Discrepancias de stock
+            const colors = await strapi.documents('api::color.color').findMany({
+                populate: ['inventory_movements']
+            });
+
+            for (const color of colors) {
+                const movs = await strapi.db.query('api::inventory-movement.inventory-movement').findMany({
+                    where: { color: { documentId: color.documentId } }
+                });
+
+                const calculatedStock = movs.reduce((acc, m) => {
+                    return m.type === 'IN' ? acc + m.quantity : acc - m.quantity;
+                }, 0);
+
+                if (calculatedStock !== color.stock) {
+                    results.stockDiscrepancies.push({
+                        color: color.name,
+                        documentId: color.documentId,
+                        dbStock: color.stock,
+                        calculatedStock: calculatedStock
+                    });
+                }
+            }
+
+            // 4. Productos sin colores
+            const products = await strapi.documents('api::product.product').findMany({
+                populate: ['colors']
+            });
+
+            for (const prod of products) {
+                if (!prod.colors || prod.colors.length === 0) {
+                    results.productsMissingDefaultColor.push({
+                        id: prod.id,
+                        title: prod.title
+                    });
+                }
+            }
+
+            return ctx.send({ data: results });
+        } catch (err) {
+            return ctx.badRequest('Error en auditoría: ' + err.message);
+        }
     }
 }));

@@ -38,18 +38,15 @@ export default {
 };
 
 async function processInventoryStock(order) {
-    // Usamos documentId porque en Strapi 5 el ID numérico puede cambiar entre versiones (draft/published)
     const orderId = order.documentId || order.id;
     const isCancelled = order.orderStatus === 'cancelled' || order.orderStatus === 'returned';
     
-    // Descontar stock si es un estado activo
     const shouldDeduct = order.orderStatus === 'pending' || order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
     
-    // Usamos el documentId en la razón para que sea consistente en todas las versiones del documento
     const saleReason = `Venta automática (Pedido #${orderId})`;
     const returnReason = `Devolución automática (Cancelación/Devolución Pedido #${orderId})`;
 
-    // 1. Verificar movimientos existentes de forma paralela
+    // 1. Verificar movimientos existentes usando el documentId del pedido en la razón
     const [existingSale, existingReturn] = await Promise.all([
         strapi.db.query('api::inventory-movement.inventory-movement').findOne({
             where: { reason: { $contains: `Pedido #${orderId}` }, type: 'OUT' }
@@ -59,57 +56,81 @@ async function processInventoryStock(order) {
         })
     ]);
 
-    // CASO A: Cancelación/Devolución (Devolver stock si se había descontado antes y no se ha devuelto ya)
+    let items = order.order;
+    if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
+    if (!Array.isArray(items)) return;
+
+    // CASO A: Cancelación/Devolución
     if (isCancelled && existingSale && !existingReturn) {
-        let items = order.order;
-        if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
-        
-        if (Array.isArray(items)) {
-            const promises = items.map(item => {
-                if (item.colorId) {
-                    return strapi.documents('api::inventory-movement.inventory-movement').create({
-                        data: {
-                            color: item.colorId,
-                            quantity: Number(item.quantity),
-                            type: 'IN',
-                            reason: returnReason,
-                            exchangeRate: order.exchangeRate || 1,
-                            performedBy: order.performedBy?.id || order.performedBy || null,
-                            date: new Date().toISOString()
-                        }
-                    });
+        const promises = items.map(async (item) => {
+            let colorId = item.colorId;
+            let productId = item.productId;
+
+            // Si no hay colorId, intentar recuperarlo del producto (Sugerencia 1)
+            if (!colorId && productId) {
+                const prod = await strapi.documents('api::product.product').findOne({
+                    documentId: productId.toString(),
+                    populate: ['colors']
+                });
+                if (prod?.colors?.[0]) {
+                    colorId = prod.colors[0].documentId;
                 }
-                return null;
-            }).filter(Boolean);
-            await Promise.all(promises);
-        }
+            }
+
+            if (colorId) {
+                return strapi.documents('api::inventory-movement.inventory-movement').create({
+                    data: {
+                        color: colorId,
+                        product: productId || null,
+                        quantity: Number(item.quantity),
+                        type: 'IN',
+                        reason: returnReason,
+                        exchangeRate: order.exchangeRate || 1,
+                        performedBy: order.performedBy?.id || order.performedBy || null,
+                        date: new Date().toISOString()
+                    }
+                });
+            }
+            return null;
+        });
+        await Promise.all(promises);
         return;
     }
 
-    // CASO B: Descuento de stock (Solo si aplica y no se ha hecho antes)
+    // CASO B: Descuento de stock
     if (shouldDeduct && !existingSale) {
-        let items = order.order;
-        if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
+        const promises = items.map(async (item) => {
+            let colorId = item.colorId;
+            let productId = item.productId;
 
-        if (Array.isArray(items)) {
-            const promises = items.map(item => {
-                if (item.colorId) {
-                    return strapi.documents('api::inventory-movement.inventory-movement').create({
-                        data: {
-                            color: item.colorId,
-                            quantity: Number(item.quantity),
-                            type: 'OUT',
-                            reason: saleReason,
-                            exchangeRate: order.exchangeRate || 1,
-                            performedBy: order.performedBy?.id || order.performedBy || null,
-                            date: new Date().toISOString()
-                        }
-                    });
+            // Si no hay colorId, intentar recuperarlo del producto (Sugerencia 1)
+            if (!colorId && productId) {
+                const prod = await strapi.documents('api::product.product').findOne({
+                    documentId: productId.toString(),
+                    populate: ['colors']
+                });
+                if (prod?.colors?.[0]) {
+                    colorId = prod.colors[0].documentId;
                 }
-                return null;
-            }).filter(Boolean);
-            await Promise.all(promises);
-        }
+            }
+
+            if (colorId) {
+                return strapi.documents('api::inventory-movement.inventory-movement').create({
+                    data: {
+                        color: colorId,
+                        product: productId || null,
+                        quantity: Number(item.quantity),
+                        type: 'OUT',
+                        reason: saleReason,
+                        exchangeRate: order.exchangeRate || 1,
+                        performedBy: order.performedBy?.id || order.performedBy || null,
+                        date: new Date().toISOString()
+                    }
+                });
+            }
+            return null;
+        });
+        await Promise.all(promises);
     }
 }
 
