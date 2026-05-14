@@ -41,7 +41,8 @@ async function processInventoryStock(order) {
     const orderId = order.documentId || order.id;
     const isCancelled = order.orderStatus === 'cancelled' || order.orderStatus === 'returned';
     
-    const shouldDeduct = order.orderStatus === 'pending' || order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit';
+    // Si el estado es 'pending', ninguno descuenta stock (por petición del usuario)
+    const shouldDeduct = order.orderStatus !== 'pending' && (order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit' || order.orderType === 'apartado');
     
     const saleReason = `Venta automática (Pedido #${orderId})`;
     const returnReason = `Devolución automática (Cancelación/Devolución Pedido #${orderId})`;

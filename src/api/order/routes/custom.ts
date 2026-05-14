@@ -56,14 +56,5 @@ export default {
         middlewares: [isAdminMiddleware],
       },
     },
-    {
-      method: 'GET',
-      path: '/orders-admin/audit-data',
-      handler: 'api::order.order.auditData',
-      config: {
-        auth: false,
-        middlewares: [isAdminMiddleware],
-      },
-    },
   ],
 };

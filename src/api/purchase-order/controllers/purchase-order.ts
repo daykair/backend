@@ -80,6 +80,7 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
                         await strapi.documents('api::inventory-movement.inventory-movement').create({
                             data: {
                                 color: colorEntity.documentId,
+                                product: colorEntity.product?.documentId || null,
                                 quantity: adj.quantity,
                                 type: adj.type,
                                 reason: enrichedReason,
