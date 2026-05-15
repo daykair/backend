@@ -20,7 +20,7 @@
     },
     "quantity": {
       "type": "integer",
-      "required": true
+      "required": false
     },
     "type": {
       "type": "enumeration",
@@ -49,6 +49,14 @@
       "type": "relation",
       "relation": "manyToOne",
       "target": "api::product.product"
+    },
+    "items": {
+      "type": "json"
+    },
+    "order": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::order.order"
     }
   }
 }

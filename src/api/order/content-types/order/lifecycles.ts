@@ -39,99 +39,112 @@ export default {
 
 async function processInventoryStock(order) {
     const orderId = order.documentId || order.id;
+    console.log(`[Order Lifecycle] Procesando inventario para pedido #${orderId} (Estado: ${order.orderStatus})`);
+
     const isCancelled = order.orderStatus === 'cancelled' || order.orderStatus === 'returned';
-    
-    // Si el estado es 'pending', ninguno descuenta stock (por petición del usuario)
     const shouldDeduct = order.orderStatus !== 'pending' && (order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit' || order.orderType === 'apartado');
     
-    const saleReason = `Venta automática (Pedido #${orderId})`;
-    const returnReason = `Devolución automática (Cancelación/Devolución Pedido #${orderId})`;
+    const saleReason = `Venta automática por lote (Pedido #${orderId})`;
+    const returnReason = `Devolución automática por lote (Cancelación/Devolución Pedido #${orderId})`;
 
-    // 1. Verificar movimientos existentes usando el documentId del pedido en la razón
+    // Verificar movimientos existentes (ahora buscando por relación de orden o razón)
     const [existingSale, existingReturn] = await Promise.all([
         strapi.db.query('api::inventory-movement.inventory-movement').findOne({
-            where: { reason: { $contains: `Pedido #${orderId}` }, type: 'OUT' }
+            where: { 
+                $or: [
+                    { order: order.id },
+                    { reason: { $contains: `Pedido #${orderId}` } }
+                ],
+                type: 'OUT' 
+            }
         }),
         strapi.db.query('api::inventory-movement.inventory-movement').findOne({
-            where: { reason: { $contains: `Pedido #${orderId}` }, type: 'IN' }
+            where: { 
+                $or: [
+                    { order: order.id },
+                    { reason: { $contains: `Pedido #${orderId}` } }
+                ],
+                type: 'IN' 
+            }
         })
     ]);
 
     let items = order.order;
     if (typeof items === 'string') try { items = JSON.parse(items); } catch (e) { return; }
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) {
+        console.warn(`[Order Lifecycle] No se encontraron items válidos en el pedido #${orderId}`);
+        return;
+    }
 
     // CASO A: Cancelación/Devolución
     if (isCancelled && existingSale && !existingReturn) {
-        const promises = items.map(async (item) => {
-            let colorId = item.colorId;
-            let productId = item.productId;
-
-            // Si no hay colorId, intentar recuperarlo del producto (Sugerencia 1)
-            if (!colorId && productId) {
-                const prod = await strapi.documents('api::product.product').findOne({
-                    documentId: productId.toString(),
-                    populate: ['colors']
-                });
-                if (prod?.colors?.[0]) {
-                    colorId = prod.colors[0].documentId;
-                }
-            }
-
-            if (colorId) {
-                return strapi.documents('api::inventory-movement.inventory-movement').create({
-                    data: {
-                        color: colorId,
-                        product: productId || null,
-                        quantity: Number(item.quantity),
-                        type: 'IN',
-                        reason: returnReason,
-                        exchangeRate: order.exchangeRate || 1,
-                        performedBy: order.performedBy?.id || order.performedBy || null,
-                        date: new Date().toISOString()
-                    }
-                });
-            }
-            return null;
+        console.log(`[Order Lifecycle] Creando movimiento de devolución por LOTE para pedido #${orderId}`);
+        
+        let totalQty = 0;
+        const movementItems = items.map(item => {
+            const qty = Number(item.quantity) || 0;
+            totalQty += qty;
+            return {
+                colorId: item.colorId,
+                productId: item.productId,
+                title: item.title || 'Producto',
+                colorName: item.selectedColor || 'N/A',
+                quantity: qty
+            };
         });
-        await Promise.all(promises);
+
+        await strapi.documents('api::inventory-movement.inventory-movement').create({
+            data: {
+                type: 'IN',
+                reason: returnReason,
+                order: order.id,
+                items: movementItems,
+                quantity: totalQty,
+                date: new Date().toISOString(),
+                performedBy: order.performedBy?.id || order.performedBy || null,
+                exchangeRate: order.exchangeRate || 1
+            }
+        });
+        
+        console.log(`[Order Lifecycle] Devolución por lote registrada para pedido #${orderId}`);
         return;
     }
 
     // CASO B: Descuento de stock
     if (shouldDeduct && !existingSale) {
-        const promises = items.map(async (item) => {
-            let colorId = item.colorId;
-            let productId = item.productId;
-
-            // Si no hay colorId, intentar recuperarlo del producto (Sugerencia 1)
-            if (!colorId && productId) {
-                const prod = await strapi.documents('api::product.product').findOne({
-                    documentId: productId.toString(),
-                    populate: ['colors']
-                });
-                if (prod?.colors?.[0]) {
-                    colorId = prod.colors[0].documentId;
-                }
-            }
-
-            if (colorId) {
-                return strapi.documents('api::inventory-movement.inventory-movement').create({
-                    data: {
-                        color: colorId,
-                        product: productId || null,
-                        quantity: Number(item.quantity),
-                        type: 'OUT',
-                        reason: saleReason,
-                        exchangeRate: order.exchangeRate || 1,
-                        performedBy: order.performedBy?.id || order.performedBy || null,
-                        date: new Date().toISOString()
-                    }
-                });
-            }
-            return null;
+        console.log(`[Order Lifecycle] Creando movimiento de salida por LOTE para pedido #${orderId}`);
+        
+        let totalQty = 0;
+        const movementItems = items.map(item => {
+            const qty = Number(item.quantity) || 0;
+            totalQty += qty;
+            return {
+                colorId: item.colorId,
+                productId: item.productId,
+                title: item.title || 'Producto',
+                colorName: item.selectedColor || 'N/A',
+                quantity: qty
+            };
         });
-        await Promise.all(promises);
+
+        await strapi.documents('api::inventory-movement.inventory-movement').create({
+            data: {
+                type: 'OUT',
+                reason: saleReason,
+                order: order.id,
+                items: movementItems,
+                quantity: totalQty,
+                date: new Date().toISOString(),
+                performedBy: order.performedBy?.id || order.performedBy || null,
+                exchangeRate: order.exchangeRate || 1
+            }
+        });
+
+        console.log(`[Order Lifecycle] Descuento de stock por lote registrado para pedido #${orderId}`);
+    } else if (shouldDeduct && existingSale) {
+        console.log(`[Order Lifecycle] El pedido #${orderId} ya tiene un movimiento de salida. Omitiendo.`);
+    } else if (!shouldDeduct) {
+        console.log(`[Order Lifecycle] El estado '${order.orderStatus}' no requiere deducción de inventario.`);
     }
 }
 

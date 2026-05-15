@@ -482,6 +482,13 @@ export interface PluginUsersPermissionsUser
       'oneToMany',
       'plugin::users-permissions.user'
     >;
+    fullname: Schema.Attribute.String;
+    phone: Schema.Attribute.String;
+    address: Schema.Attribute.String;
+    city: Schema.Attribute.String;
+    state: Schema.Attribute.String;
+    ci: Schema.Attribute.String;
+    price_type: Schema.Attribute.String & Schema.Attribute.DefaultTo<'detal'>;
   };
 }
 
@@ -615,6 +622,11 @@ export interface ApiExpenseExpense extends Struct.CollectionTypeSchema {
     date: Schema.Attribute.Date & Schema.Attribute.Required;
     category: Schema.Attribute.String & Schema.Attribute.Required;
     reference: Schema.Attribute.String;
+    performedBy: Schema.Attribute.Relation<
+      'manyToOne',
+      'plugin::users-permissions.user'
+    >;
+    exchangeRate: Schema.Attribute.Decimal;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -644,11 +656,19 @@ export interface ApiInventoryMovementInventoryMovement
   };
   attributes: {
     color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
-    quantity: Schema.Attribute.Integer & Schema.Attribute.Required;
+    quantity: Schema.Attribute.Integer;
     type: Schema.Attribute.Enumeration<['IN', 'OUT']> &
       Schema.Attribute.Required;
     reason: Schema.Attribute.String;
     date: Schema.Attribute.DateTime & Schema.Attribute.Required;
+    performedBy: Schema.Attribute.Relation<
+      'manyToOne',
+      'plugin::users-permissions.user'
+    >;
+    exchangeRate: Schema.Attribute.Decimal;
+    product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
+    items: Schema.Attribute.JSON;
+    order: Schema.Attribute.Relation<'oneToOne', 'api::order.order'>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -697,6 +717,17 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     paymentReference: Schema.Attribute.String;
     orderType: Schema.Attribute.String & Schema.Attribute.DefaultTo<'regular'>;
     amountPaid: Schema.Attribute.Decimal;
+    performedBy: Schema.Attribute.Relation<
+      'manyToOne',
+      'plugin::users-permissions.user'
+    >;
+    customer: Schema.Attribute.Relation<
+      'manyToOne',
+      'plugin::users-permissions.user'
+    >;
+    exchangeRate: Schema.Attribute.Decimal;
+    payments: Schema.Attribute.JSON;
+    shippingCost: Schema.Attribute.Decimal;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -722,6 +753,7 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
   };
   attributes: {
     slug: Schema.Attribute.UID;
+    productCode: Schema.Attribute.String & Schema.Attribute.Unique;
     title: Schema.Attribute.String;
     description: Schema.Attribute.Text;
     isActive: Schema.Attribute.Boolean;
@@ -735,11 +767,12 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
       'manyToMany',
       'api::category.category'
     >;
-    price: Schema.Attribute.Integer & Schema.Attribute.Required;
+    price: Schema.Attribute.Decimal & Schema.Attribute.Required;
     discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
     isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
-    wholesalePrice: Schema.Attribute.Integer & Schema.Attribute.Required;
-    costPrice: Schema.Attribute.Integer & Schema.Attribute.Private;
+    wholesalePrice: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    costPrice: Schema.Attribute.Decimal & Schema.Attribute.Private;
+    hasVariants: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -783,6 +816,7 @@ export interface ApiPurchaseOrderPurchaseOrder
     expectedArrivalDate: Schema.Attribute.Date;
     reference: Schema.Attribute.String;
     items: Schema.Attribute.JSON & Schema.Attribute.Required;
+    payments: Schema.Attribute.JSON;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
