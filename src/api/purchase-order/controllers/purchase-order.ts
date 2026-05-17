@@ -99,12 +99,11 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
                         const itemData = items.find((i: any) => i.colorId === adj.colorId || i.productId === colorEntity.product?.documentId);
                         
                         if (itemData && itemData.unitCost && colorEntity.product) {
-                            await strapi.documents('api::product.product').update({
-                                documentId: colorEntity.product.documentId,
+                            await strapi.db.query('api::product.product').updateMany({
+                                where: { documentId: colorEntity.product.documentId },
                                 data: {
                                     costPrice: Number(itemData.unitCost)
-                                },
-                                status: 'published'
+                                }
                             });
                         }
                     }

@@ -41,14 +41,20 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             if (isNewProduct) {
                 savedProduct = await strapi.documents('api::product.product').create({ 
                     data: cleanProductData,
-                    status: 'published'
+                    status: 'draft'
+                });
+                await strapi.documents('api::product.product').publish({
+                    documentId: savedProduct.documentId
                 });
                 productId = savedProduct.documentId;
             } else {
                 savedProduct = await strapi.documents('api::product.product').update({
                     documentId: productId,
                     data: cleanProductData,
-                    status: 'published'
+                    status: 'draft'
+                });
+                await strapi.documents('api::product.product').publish({
+                    documentId: productId
                 });
             }
 
@@ -75,13 +81,19 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                         await strapi.documents('api::color.color').update({
                             documentId: variant.id,
                             data: dataToUpdate,
-                            status: 'published'
+                            status: 'draft'
+                        });
+                        await strapi.documents('api::color.color').publish({
+                            documentId: variant.id
                         });
                     } else {
                         const { id, ...dataToCreate } = variant;
-                        await strapi.documents('api::color.color').create({
+                        const newVariant = await strapi.documents('api::color.color').create({
                             data: { ...dataToCreate, product: productId },
-                            status: 'published'
+                            status: 'draft'
+                        });
+                        await strapi.documents('api::color.color').publish({
+                            documentId: newVariant.documentId
                         });
                     }
                 }

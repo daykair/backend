@@ -24,7 +24,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
     async processOrderFull(ctx) {
         return await strapi.db.transaction(async () => {
             try {
-                const { orderData, stockAdjustments } = ctx.request.body.data;
+                const { orderData } = ctx.request.body.data;
                 let savedOrder = null;
 
                 // Aux para fecha Caracas (UTC-4)
