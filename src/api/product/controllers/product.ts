@@ -40,21 +40,13 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
             if (isNewProduct) {
                 savedProduct = await strapi.documents('api::product.product').create({ 
-                    data: cleanProductData,
-                    status: 'draft'
-                });
-                await strapi.documents('api::product.product').publish({
-                    documentId: savedProduct.documentId
+                    data: cleanProductData
                 });
                 productId = savedProduct.documentId;
             } else {
                 savedProduct = await strapi.documents('api::product.product').update({
                     documentId: productId,
-                    data: cleanProductData,
-                    status: 'draft'
-                });
-                await strapi.documents('api::product.product').publish({
-                    documentId: productId
+                    data: cleanProductData
                 });
             }
 
@@ -80,20 +72,12 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                         const { id, ...dataToUpdate } = variant;
                         await strapi.documents('api::color.color').update({
                             documentId: variant.id,
-                            data: dataToUpdate,
-                            status: 'draft'
-                        });
-                        await strapi.documents('api::color.color').publish({
-                            documentId: variant.id
+                            data: dataToUpdate
                         });
                     } else {
                         const { id, ...dataToCreate } = variant;
-                        const newVariant = await strapi.documents('api::color.color').create({
-                            data: { ...dataToCreate, product: productId },
-                            status: 'draft'
-                        });
-                        await strapi.documents('api::color.color').publish({
-                            documentId: newVariant.documentId
+                        await strapi.documents('api::color.color').create({
+                            data: { ...dataToCreate, product: productId }
                         });
                     }
                 }
@@ -112,31 +96,4 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             return ctx.badRequest('Error saving product and variants' + " " + error.message);
         }
     },
-    async publishAllColors(ctx) {
-        try {
-            // Usamos db.query para asegurar que encontramos todos los que no tienen fecha de publicación
-            const colors = await strapi.db.query('api::color.color').findMany({
-                where: {
-                    published_at: null
-                },
-                select: ['documentId']
-            });
-
-            let count = 0;
-            for (const color of colors) {
-                try {
-                    await strapi.documents('api::color.color').publish({
-                        documentId: color.documentId
-                    });
-                    count++;
-                } catch (e) {
-                    console.error(`Error publicando ${color.documentId}:`, e.message);
-                }
-            }
-
-            return ctx.send({ success: true, message: `${count} colores publicados.` });
-        } catch (err) {
-            return ctx.badRequest('Error publicando colores: ' + err.message);
-        }
-    }
 }));

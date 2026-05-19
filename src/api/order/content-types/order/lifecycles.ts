@@ -10,24 +10,48 @@ export default {
     async beforeUpdate(event) {
         // Capturar el estado anterior para detectar cambios de estado
         const { where } = event.params;
-        if (where && (where.id || where.documentId)) {
-            const existing = await strapi.db.query('api::order.order').findOne({ 
-                where: where.id ? { id: where.id } : { documentId: where.documentId }
-            });
-            if (existing) {
-                event.state = { previousStatus: existing.orderStatus };
+        if (where) {
+            const queryWhere: any = {};
+            if (where.id) queryWhere.id = where.id;
+            else if (where.documentId) queryWhere.documentId = where.documentId;
+            else if (typeof where === 'string') queryWhere.documentId = where;
+            else if (typeof where === 'number') queryWhere.id = where;
+
+            if (Object.keys(queryWhere).length > 0) {
+                const existing = await strapi.db.query('api::order.order').findOne({ 
+                    where: queryWhere 
+                });
+                if (existing) {
+                    event.state = { previousStatus: existing.orderStatus };
+                }
             }
         }
         await processOrderItemsCosts(event);
     },
     async afterCreate(event) {
         const { result } = event;
+        
+        // SEGURIDAD: Solo procesar para la versión publicada, ignorar borradores (drafts)
+        if (!result.publishedAt) return;
+
         await processDeliveryExpense(result);
         await processInventoryStock(result);
     },
     async afterUpdate(event) {
         const { result, state } = event;
-        const previousStatus = state?.previousStatus;
+        
+        // SEGURIDAD: Solo procesar para la versión publicada, ignorar borradores (drafts)
+        if (!result.publishedAt) return;
+
+        let previousStatus = state?.previousStatus;
+        
+        if (previousStatus === undefined) {
+            const updateData = event.params?.data;
+            // Si orderStatus no se incluyó en la actualización, es seguro asumir que no cambió
+            if (updateData && updateData.orderStatus === undefined) {
+                previousStatus = result.orderStatus;
+            }
+        }
         
         // Solo procesar stock si el estado ha cambiado
         if (result.orderStatus !== previousStatus) {
@@ -52,7 +76,8 @@ async function processInventoryStock(order) {
         strapi.db.query('api::inventory-movement.inventory-movement').findOne({
             where: { 
                 $or: [
-                    { order: order.id },
+                    { order: { id: order.id } },
+                    { order: { documentId: order.documentId } },
                     { reason: { $contains: `Pedido #${orderId}` } }
                 ],
                 type: 'OUT' 
@@ -61,7 +86,8 @@ async function processInventoryStock(order) {
         strapi.db.query('api::inventory-movement.inventory-movement').findOne({
             where: { 
                 $or: [
-                    { order: order.id },
+                    { order: { id: order.id } },
+                    { order: { documentId: order.documentId } },
                     { reason: { $contains: `Pedido #${orderId}` } }
                 ],
                 type: 'IN' 
@@ -97,7 +123,7 @@ async function processInventoryStock(order) {
             data: {
                 type: 'IN',
                 reason: returnReason,
-                order: order.id,
+                order: order.documentId || order.id,
                 items: movementItems,
                 quantity: totalQty,
                 date: new Date().toISOString(),
@@ -131,7 +157,7 @@ async function processInventoryStock(order) {
             data: {
                 type: 'OUT',
                 reason: saleReason,
-                order: order.id,
+                order: order.documentId || order.id,
                 items: movementItems,
                 quantity: totalQty,
                 date: new Date().toISOString(),
@@ -198,12 +224,17 @@ async function processOrderItemsCosts(event) {
 }
 
 async function processDeliveryExpense(order) {
-    const orderId = order.id || order.documentId;
-    const reference = `Delivery de la Orden #${orderId}`;
+    const idNum = order.id;
+    const docId = order.documentId;
+    const primaryRef = `Delivery de la Orden #${docId || idNum}`;
 
-    // Buscar si ya existe un gasto con esa referencia
+    // Buscar si ya existe un gasto con la referencia (por ID numérico o documentId)
+    const filters: any[] = [];
+    if (docId) filters.push({ reference: { $eq: `Delivery de la Orden #${docId}` } });
+    if (idNum) filters.push({ reference: { $eq: `Delivery de la Orden #${idNum}` } });
+
     const existingExpenses = await strapi.documents('api::expense.expense').findMany({
-        filters: { reference: { $eq: reference } }
+        filters: { $or: filters }
     });
 
     if (order.deliveryMethod === 'delivery' && order.option && order.option !== 'Propio') {
@@ -214,21 +245,33 @@ async function processDeliveryExpense(order) {
                 data: {
                     title: expenseTitle,
                     amount: 0,
-                    date: new Date(Date.now() - 4 * 3600000).toISOString().split('T')[0],
+                    date: new Date().toISOString().split('T')[0],
                     category: 'Operaciones',
-                    reference: reference
+                    reference: primaryRef
                 }
             });
         } else {
+            // Actualizar el primer gasto existente
             const expense = existingExpenses[0];
             await strapi.documents('api::expense.expense').update({
                 documentId: expense.documentId,
                 data: {
                     title: expenseTitle,
+                    reference: primaryRef // Normalizar a la referencia consistente
                 }
             });
+
+            // Limpieza Automática de Duplicados Preexistentes
+            if (existingExpenses.length > 1) {
+                for (let i = 1; i < existingExpenses.length; i++) {
+                    await strapi.documents('api::expense.expense').delete({
+                        documentId: existingExpenses[i].documentId
+                    });
+                }
+            }
         }
     } else {
+        // Eliminar gastos asociados si ya no aplica el delivery
         if (existingExpenses && existingExpenses.length > 0) {
             for (const exp of existingExpenses) {
                 await strapi.documents('api::expense.expense').delete({

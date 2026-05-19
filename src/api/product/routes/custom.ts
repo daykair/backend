@@ -64,15 +64,6 @@ export default {
                 auth: false,
                 middlewares: [isAdminMiddleware]
             }
-        },
-        {
-            method: 'GET',
-            path: '/products-admin/publish-colors-fix',
-            handler: 'api::product.product.publishAllColors',
-            config: {
-                auth: false,
-                middlewares: [isAdminMiddleware]
-            }
         }
     ]
 }

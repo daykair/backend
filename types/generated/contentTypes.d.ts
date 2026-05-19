@@ -569,7 +569,7 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
     description: '';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     name: Schema.Attribute.String & Schema.Attribute.Required;
@@ -602,6 +602,36 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     locale: Schema.Attribute.String;
     localizations: Schema.Attribute.Relation<'oneToMany', 'api::color.color'>;
+  };
+}
+
+export interface ApiExchangeRateExchangeRate extends Struct.SingleTypeSchema {
+  collectionName: 'exchange_rates';
+  info: {
+    singularName: 'exchange-rate';
+    pluralName: 'exchange-rates';
+    displayName: 'Tasa de Cambio';
+    description: 'Tasa oficial del BCV para conversi\u00F3n de divisas';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    rate: Schema.Attribute.Decimal & Schema.Attribute.Required;
+    rateDate: Schema.Attribute.String;
+    source: Schema.Attribute.String;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::exchange-rate.exchange-rate'
+    >;
   };
 }
 
@@ -749,7 +779,7 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
     description: '';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     slug: Schema.Attribute.UID;
@@ -1247,6 +1277,7 @@ declare module '@strapi/strapi' {
       'api::cash-register.cash-register': ApiCashRegisterCashRegister;
       'api::category.category': ApiCategoryCategory;
       'api::color.color': ApiColorColor;
+      'api::exchange-rate.exchange-rate': ApiExchangeRateExchangeRate;
       'api::expense.expense': ApiExpenseExpense;
       'api::inventory-movement.inventory-movement': ApiInventoryMovementInventoryMovement;
       'api::order.order': ApiOrderOrder;

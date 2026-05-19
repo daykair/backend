@@ -43,10 +43,9 @@ export default {
             if (entity) effectiveDocId = entity.documentId;
           }
 
-          // Obtener stock actual (usamos 'draft' para obtener la versión más reciente, incluso si no está publicada)
+          // Obtener stock actual
           let color = await strapi.documents('api::color.color').findOne({
-            documentId: effectiveDocId,
-            status: 'draft'
+            documentId: effectiveDocId
           });
 
           if (!color) {
@@ -91,8 +90,7 @@ export default {
       console.log(`[Inventory Lifecycle] Procesando movimiento individual para color: ${effectiveDocumentId}`);
 
       let color = await strapi.documents('api::color.color').findOne({
-        documentId: effectiveDocumentId,
-        status: 'draft'
+        documentId: effectiveDocumentId
       });
 
       if (!color) {

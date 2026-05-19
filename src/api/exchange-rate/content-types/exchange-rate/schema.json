@@ -1,0 +1,26 @@
+{
+  "kind": "singleType",
+  "collectionName": "exchange_rates",
+  "info": {
+    "singularName": "exchange-rate",
+    "pluralName": "exchange-rates",
+    "displayName": "Tasa de Cambio",
+    "description": "Tasa oficial del BCV para conversión de divisas"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "rate": {
+      "type": "decimal",
+      "required": true
+    },
+    "rateDate": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    }
+  }
+}
