@@ -40,7 +40,69 @@ export default {
       console.error('[BCV Boot] Error al inicializar tasa en arranque:', err.message);
     }
 
-    // 2. Programar la rutina diaria de raspado a las 12:00 AM (Medianoche) Hora de Caracas
+    // 2. Migración / Inicialización Multi-Almacén
+    try {
+      console.log('[Migration] Verificando almacenes e inicializando migración...');
+      let defaultWarehouse = await strapi.db.query('api::warehouse.warehouse').findOne({
+        where: { code: 'MAIN' }
+      }) as any;
+
+      if (!defaultWarehouse) {
+        console.log('[Migration] Creando almacén por defecto "Almacén Principal"...');
+        defaultWarehouse = await strapi.documents('api::warehouse.warehouse').create({
+          data: {
+            name: 'Almacén Principal',
+            code: 'MAIN',
+            address: 'Sede Principal',
+            isActive: true
+          },
+          status: 'published'
+        });
+      }
+
+      // Migrar existencias globales de variantes de productos a este almacén
+      const colors = await strapi.documents('api::color.color').findMany({
+        limit: -1
+      });
+
+      const existingStocks = await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
+        populate: ['color', 'warehouse'],
+        limit: -1
+      }) as any[];
+
+      const existingSet = new Set(existingStocks.map(s => {
+        const cId = s.color?.documentId || s.color?.id;
+        const wId = s.warehouse?.documentId || s.warehouse?.id;
+        return `${cId}_${wId}`;
+      }));
+
+      let migrationCount = 0;
+      for (const color of colors) {
+        const colorKey = `${color.documentId || color.id}_${defaultWarehouse.documentId || defaultWarehouse.id}`;
+        if (!existingSet.has(colorKey)) {
+          const initialStock = Number(color.stock || 0);
+          await strapi.documents('api::warehouse-stock.warehouse-stock').create({
+            data: {
+              stock: initialStock,
+              color: color.documentId || color.id,
+              warehouse: defaultWarehouse.documentId || defaultWarehouse.id
+            },
+            status: 'published'
+          });
+          migrationCount++;
+        }
+      }
+
+      if (migrationCount > 0) {
+        console.log(`[Migration] Migradas existencias globales de ${migrationCount} variantes al almacén principal "MAIN".`);
+      } else {
+        console.log('[Migration] No se requirieron migraciones de stock; base de datos al día.');
+      }
+    } catch (err: any) {
+      console.error('[Migration] Error crítico en la migración de inventarios:', err.message);
+    }
+
+    // 3. Programar la rutina diaria de raspado a las 12:00 AM (Medianoche) Hora de Caracas
     scheduleDailyBcvUpdate(strapi);
   },
 };

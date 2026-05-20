@@ -71,6 +71,51 @@ async function processInventoryStock(order) {
     const saleReason = `Venta automática por lote (Pedido #${orderId})`;
     const returnReason = `Devolución automática por lote (Cancelación/Devolución Pedido #${orderId})`;
 
+    // Obtener Almacén de Despacho de la orden (con fallback al almacén principal "MAIN")
+    let dispatchWhDocId = null;
+    const rawWh = order.dispatchWarehouse;
+    
+    if (rawWh) {
+        if (typeof rawWh === 'object') {
+            dispatchWhDocId = rawWh.documentId || rawWh.id;
+        } else {
+            dispatchWhDocId = rawWh;
+        }
+    }
+
+    if (!dispatchWhDocId) {
+        // Consultar la orden a fondo para ver si tiene dispatchWarehouse asignado
+        const fullOrder = await strapi.documents('api::order.order').findOne({
+            documentId: order.documentId || order.id,
+            populate: ['dispatchWarehouse']
+        }) as any;
+        if (fullOrder?.dispatchWarehouse) {
+            dispatchWhDocId = fullOrder.dispatchWarehouse.documentId || fullOrder.dispatchWarehouse.id;
+        }
+    }
+
+    // Resolver ID numérico a DocumentID si es necesario
+    if (dispatchWhDocId && !isNaN(Number(dispatchWhDocId)) && !dispatchWhDocId.toString().includes('-')) {
+        const whEntity = await strapi.db.query('api::warehouse.warehouse').findOne({
+            where: { id: Number(dispatchWhDocId) },
+            select: ['documentId']
+        });
+        if (whEntity) dispatchWhDocId = whEntity.documentId;
+    }
+
+    if (!dispatchWhDocId) {
+        // Fallback a MAIN
+        const mainWh = await strapi.db.query('api::warehouse.warehouse').findOne({
+            where: { code: 'MAIN' },
+            select: ['documentId']
+        });
+        if (mainWh) {
+            dispatchWhDocId = mainWh.documentId;
+        }
+    }
+
+    console.log(`[Order Lifecycle] Almacén de despacho determinado para pedido #${orderId}: ${dispatchWhDocId}`);
+
     // Verificar movimientos existentes (ahora buscando por relación de orden o razón)
     const [existingSale, existingReturn] = await Promise.all([
         strapi.db.query('api::inventory-movement.inventory-movement').findOne({
@@ -128,7 +173,8 @@ async function processInventoryStock(order) {
                 quantity: totalQty,
                 date: new Date().toISOString(),
                 performedBy: order.performedBy?.id || order.performedBy || null,
-                exchangeRate: order.exchangeRate || 1
+                exchangeRate: order.exchangeRate || 1,
+                warehouse: dispatchWhDocId
             }
         });
         
@@ -162,7 +208,8 @@ async function processInventoryStock(order) {
                 quantity: totalQty,
                 date: new Date().toISOString(),
                 performedBy: order.performedBy?.id || order.performedBy || null,
-                exchangeRate: order.exchangeRate || 1
+                exchangeRate: order.exchangeRate || 1,
+                warehouse: dispatchWhDocId
             }
         });
 

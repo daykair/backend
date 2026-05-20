@@ -65,6 +65,12 @@
       "relation": "oneToMany",
       "target": "api::inventory-movement.inventory-movement",
       "mappedBy": "color"
+    },
+    "warehouse_stocks": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::warehouse-stock.warehouse-stock",
+      "mappedBy": "color"
     }
   }
 }

@@ -1,0 +1,38 @@
+{
+  "kind": "collectionType",
+  "collectionName": "warehouses",
+  "info": {
+    "singularName": "warehouse",
+    "pluralName": "warehouses",
+    "displayName": "Warehouse",
+    "description": "Almacenes físicos y sucursales de inventario"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true
+    },
+    "code": {
+      "type": "string",
+      "unique": true,
+      "required": true
+    },
+    "address": {
+      "type": "text"
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": true
+    },
+    "warehouse_stocks": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::warehouse-stock.warehouse-stock",
+      "mappedBy": "warehouse"
+    }
+  }
+}

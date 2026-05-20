@@ -593,6 +593,10 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       'oneToMany',
       'api::inventory-movement.inventory-movement'
     >;
+    warehouse_stocks: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::warehouse-stock.warehouse-stock'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -699,6 +703,10 @@ export interface ApiInventoryMovementInventoryMovement
     product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
     items: Schema.Attribute.JSON;
     order: Schema.Attribute.Relation<'oneToOne', 'api::order.order'>;
+    warehouse: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::warehouse.warehouse'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -758,6 +766,10 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     exchangeRate: Schema.Attribute.Decimal;
     payments: Schema.Attribute.JSON;
     shippingCost: Schema.Attribute.Decimal;
+    dispatchWarehouse: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::warehouse.warehouse'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -895,6 +907,79 @@ export interface ApiSupplierSupplier extends Struct.CollectionTypeSchema {
     localizations: Schema.Attribute.Relation<
       'oneToMany',
       'api::supplier.supplier'
+    >;
+  };
+}
+
+export interface ApiWarehouseWarehouse extends Struct.CollectionTypeSchema {
+  collectionName: 'warehouses';
+  info: {
+    singularName: 'warehouse';
+    pluralName: 'warehouses';
+    displayName: 'Warehouse';
+    description: 'Almacenes f\u00EDsicos y sucursales de inventario';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    name: Schema.Attribute.String & Schema.Attribute.Required;
+    code: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    address: Schema.Attribute.Text;
+    isActive: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    warehouse_stocks: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::warehouse-stock.warehouse-stock'
+    >;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::warehouse.warehouse'
+    >;
+  };
+}
+
+export interface ApiWarehouseStockWarehouseStock
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'warehouse_stocks';
+  info: {
+    singularName: 'warehouse-stock';
+    pluralName: 'warehouse-stocks';
+    displayName: 'Warehouse Stock';
+    description: 'Stock detallado de variantes por almac\u00E9n';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    stock: Schema.Attribute.Integer &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<0>;
+    warehouse: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::warehouse.warehouse'
+    >;
+    color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::warehouse-stock.warehouse-stock'
     >;
   };
 }
@@ -1284,6 +1369,8 @@ declare module '@strapi/strapi' {
       'api::product.product': ApiProductProduct;
       'api::purchase-order.purchase-order': ApiPurchaseOrderPurchaseOrder;
       'api::supplier.supplier': ApiSupplierSupplier;
+      'api::warehouse.warehouse': ApiWarehouseWarehouse;
+      'api::warehouse-stock.warehouse-stock': ApiWarehouseStockWarehouseStock;
       'admin::permission': AdminPermission;
       'admin::user': AdminUser;
       'admin::role': AdminRole;

@@ -1,0 +1,33 @@
+{
+  "kind": "collectionType",
+  "collectionName": "warehouse_stocks",
+  "info": {
+    "singularName": "warehouse-stock",
+    "pluralName": "warehouse-stocks",
+    "displayName": "Warehouse Stock",
+    "description": "Stock detallado de variantes por almacén"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "stock": {
+      "type": "integer",
+      "required": true,
+      "default": 0
+    },
+    "warehouse": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::warehouse.warehouse",
+      "inversedBy": "warehouse_stocks"
+    },
+    "color": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::color.color",
+      "inversedBy": "warehouse_stocks"
+    }
+  }
+}
