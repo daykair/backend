@@ -746,7 +746,6 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     orderPlaced: Schema.Attribute.DateTime;
     orderTotal: Schema.Attribute.Decimal;
     state: Schema.Attribute.String & Schema.Attribute.Private;
-    order: Schema.Attribute.JSON;
     clientName: Schema.Attribute.String & Schema.Attribute.Private;
     referenceImage: Schema.Attribute.Media<
       'images' | 'files' | 'videos' | 'audios'
@@ -764,12 +763,16 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
       'plugin::users-permissions.user'
     >;
     exchangeRate: Schema.Attribute.Decimal;
-    payments: Schema.Attribute.JSON;
     shippingCost: Schema.Attribute.Decimal;
     dispatchWarehouse: Schema.Attribute.Relation<
       'manyToOne',
       'api::warehouse.warehouse'
     >;
+    orderItems: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::order-item.order-item'
+    >;
+    payments: Schema.Attribute.Relation<'oneToMany', 'api::payment.payment'>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -779,6 +782,73 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     locale: Schema.Attribute.String;
     localizations: Schema.Attribute.Relation<'oneToMany', 'api::order.order'>;
+  };
+}
+
+export interface ApiOrderItemOrderItem extends Struct.CollectionTypeSchema {
+  collectionName: 'order_items';
+  info: {
+    singularName: 'order-item';
+    pluralName: 'order-items';
+    displayName: 'Order Item';
+    description: '';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    productName: Schema.Attribute.String;
+    colorName: Schema.Attribute.String;
+    quantity: Schema.Attribute.Integer;
+    unitPrice: Schema.Attribute.Decimal;
+    unitCost: Schema.Attribute.Decimal;
+    order: Schema.Attribute.Relation<'manyToOne', 'api::order.order'>;
+    product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
+    color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::order-item.order-item'
+    >;
+  };
+}
+
+export interface ApiPaymentPayment extends Struct.CollectionTypeSchema {
+  collectionName: 'payments';
+  info: {
+    singularName: 'payment';
+    pluralName: 'payments';
+    displayName: 'Payment';
+    description: '';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    amount: Schema.Attribute.Decimal;
+    method: Schema.Attribute.String;
+    reference: Schema.Attribute.String;
+    status: Schema.Attribute.String;
+    order: Schema.Attribute.Relation<'manyToOne', 'api::order.order'>;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::payment.payment'
+    >;
   };
 }
 
@@ -870,6 +940,48 @@ export interface ApiPurchaseOrderPurchaseOrder
     localizations: Schema.Attribute.Relation<
       'oneToMany',
       'api::purchase-order.purchase-order'
+    >;
+  };
+}
+
+export interface ApiRefreshTokenRefreshToken
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'refresh_tokens';
+  info: {
+    singularName: 'refresh-token';
+    pluralName: 'refresh-tokens';
+    displayName: 'Refresh Token';
+    description: 'Persistent refresh tokens for session management';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    tokenHash: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    user: Schema.Attribute.Relation<
+      'manyToOne',
+      'plugin::users-permissions.user'
+    >;
+    expiresAt: Schema.Attribute.DateTime;
+    revoked: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    revokedAt: Schema.Attribute.DateTime;
+    replacedBy: Schema.Attribute.String;
+    ip: Schema.Attribute.String;
+    userAgent: Schema.Attribute.Text;
+    deviceName: Schema.Attribute.String;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::refresh-token.refresh-token'
     >;
   };
 }
@@ -1366,8 +1478,11 @@ declare module '@strapi/strapi' {
       'api::expense.expense': ApiExpenseExpense;
       'api::inventory-movement.inventory-movement': ApiInventoryMovementInventoryMovement;
       'api::order.order': ApiOrderOrder;
+      'api::order-item.order-item': ApiOrderItemOrderItem;
+      'api::payment.payment': ApiPaymentPayment;
       'api::product.product': ApiProductProduct;
       'api::purchase-order.purchase-order': ApiPurchaseOrderPurchaseOrder;
+      'api::refresh-token.refresh-token': ApiRefreshTokenRefreshToken;
       'api::supplier.supplier': ApiSupplierSupplier;
       'api::warehouse.warehouse': ApiWarehouseWarehouse;
       'api::warehouse-stock.warehouse-stock': ApiWarehouseStockWarehouseStock;

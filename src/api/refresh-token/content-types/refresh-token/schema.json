@@ -1,0 +1,46 @@
+{
+  "collectionName": "refresh_tokens",
+  "info": {
+    "singularName": "refresh-token",
+    "pluralName": "refresh-tokens",
+    "displayName": "Refresh Token",
+    "description": "Persistent refresh tokens for session management"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "tokenHash": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "user": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "plugin::users-permissions.user"
+    },
+    "expiresAt": {
+      "type": "datetime"
+    },
+    "revoked": {
+      "type": "boolean",
+      "default": false
+    },
+    "revokedAt": {
+      "type": "datetime"
+    },
+    "replacedBy": {
+      "type": "string"
+    },
+    "ip": {
+      "type": "string"
+    },
+    "userAgent": {
+      "type": "text"
+    },
+    "deviceName": {
+      "type": "string"
+    }
+  }
+}

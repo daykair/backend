@@ -59,9 +59,26 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 .filter(v => v.id)
                 .map(v => v.id);
 
-            // Delete variants that are no longer in the list
-            const variantsToDelete = currentVariants.filter(cv => !variantsToKeep.includes(cv.documentId));
+            // Delete variants that are no longer in the list and their images
+            const variantsToDelete = currentVariants.filter((cv: any) => !variantsToKeep.includes(cv.documentId));
             for (const v of variantsToDelete) {
+                // Fetch the variant to get attached images
+                const variantWithImages = await strapi.documents('api::color.color').findOne({
+                    documentId: v.documentId,
+                    populate: ['images']
+                }) as any;
+
+                if (variantWithImages && variantWithImages.images) {
+                    const fileService = strapi.plugin('upload').service('upload');
+                    for (const img of variantWithImages.images) {
+                        try {
+                            await fileService.remove(img);
+                        } catch (e) {
+                            console.error("Error deleting orphaned image:", e);
+                        }
+                    }
+                }
+
                 await strapi.documents('api::color.color').delete({ documentId: v.documentId });
             }
 

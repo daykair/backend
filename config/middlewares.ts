@@ -1,6 +1,22 @@
 export default [
-	"strapi::logger",
-	"strapi::errors",
+  "global::cookie-to-bearer",
+  {
+    name: "strapi::cors",
+    config: {
+      origin: [
+        'http://localhost:4321',
+        'http://127.0.0.1:4321',
+        'https://front-saodi.vercel.app',
+        'http://localhost:3000'
+      ],
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
+      headers: ['Content-Type', 'Authorization', 'Origin', 'Accept'],
+      keepHeaderOnError: true,
+    },
+  },
+  "strapi::logger",
+  "strapi::errors",
   {
     name: "strapi::security",
     config: {
@@ -30,11 +46,10 @@ export default [
     },
   },
 
-	"strapi::cors",
-	{ name: "strapi::poweredBy", config: { PoweredBy: "Saodi Development" } },
-	"strapi::query",
-	"strapi::body",
-	"strapi::session",
-	"strapi::favicon",
-	"strapi::public",
+  { name: "strapi::poweredBy", config: { PoweredBy: "Saodi Development" } },
+  "strapi::query",
+  "strapi::body",
+  "strapi::session",
+  "strapi::favicon",
+  "strapi::public",
 ];

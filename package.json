@@ -16,13 +16,15 @@
 		"@strapi/plugin-users-permissions": "5.0.0",
 		"@strapi/provider-upload-aws-s3": "^5.44.0",
 		"@strapi/strapi": "5.0.0",
+		"@strapi/utils": "^5.46.1",
 		"better-sqlite3": "^12.9.0",
 		"mysql2": "^3.12.0",
 		"pg": "8.8.0",
 		"react": "^18.0.0",
 		"react-dom": "^18.0.0",
 		"react-router-dom": "^6.0.0",
-		"styled-components": "^6.0.0"
+		"styled-components": "^6.0.0",
+		"yup": "^1.7.1"
 	},
 	"devDependencies": {
 		"@types/node": "^20",
