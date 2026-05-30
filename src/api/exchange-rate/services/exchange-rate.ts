@@ -46,7 +46,7 @@ function fetchHtmlBcvIgnoreSsl(): Promise<string> {
   });
 }
 
-export default factories.createCoreService('api::exchange-rate.exchange-rate', ({ strapi }) => ({
+export default factories.createCoreService('api::exchange-rate.exchange-rate', () => ({
   async updateBcvRate() {
     let rate: number | null = null;
     let rateDate: string = new Date().toISOString();
@@ -103,7 +103,7 @@ export default factories.createCoreService('api::exchange-rate.exchange-rate', (
     // INTENTO 3 (Último recurso / Fallback de Emergencia): Mantener tasa previa o usar fallback histórico
     if (!rate) {
       console.warn('[BCV Scraper] Todos los intentos de obtención automática fallaron. Buscando tasa previa en la base de datos...');
-      const existing = await strapi.documents('api::exchange-rate.exchange-rate').findFirst();
+      const existing = await global.strapi.documents('api::exchange-rate.exchange-rate').findFirst();
       if (existing && existing.rate) {
         console.log(`[BCV Scraper] Manteniendo la última tasa conocida en base de datos: Bs. ${existing.rate}`);
         return existing;
@@ -116,11 +116,11 @@ export default factories.createCoreService('api::exchange-rate.exchange-rate', (
     }
 
     // Guardar o actualizar la tasa en el registro único usando el API de Documentos de Strapi 5
-    const existingRecord = await strapi.documents('api::exchange-rate.exchange-rate').findFirst();
+    const existingRecord = await global.strapi.documents('api::exchange-rate.exchange-rate').findFirst();
     let result;
 
     if (existingRecord) {
-      result = await strapi.documents('api::exchange-rate.exchange-rate').update({
+      result = await global.strapi.documents('api::exchange-rate.exchange-rate').update({
         documentId: existingRecord.documentId,
         data: {
           rate,
@@ -130,7 +130,7 @@ export default factories.createCoreService('api::exchange-rate.exchange-rate', (
       });
       console.log(`[BCV Scraper] Registro de tasa actualizado en BD vía Documentos (DocID: ${existingRecord.documentId})`);
     } else {
-      result = await strapi.documents('api::exchange-rate.exchange-rate').create({
+      result = await global.strapi.documents('api::exchange-rate.exchange-rate').create({
         data: {
           rate,
           rateDate,

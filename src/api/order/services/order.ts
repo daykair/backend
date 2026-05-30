@@ -153,13 +153,64 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             orderPayload.dispatchWarehouse = dw ? dw.id : null;
           }
 
-          if (orderPayload.customer && typeof orderPayload.customer === 'string' && !/^\d+$/.test(orderPayload.customer)) {
-            const cus = await dbQuery('plugin::users-permissions.user').findOne({
-              where: { documentId: orderPayload.customer },
+          if (orderPayload.customer) {
+            // Resolver ID si se envía un documentId
+            if (typeof orderPayload.customer === 'string' && !/^\d+$/.test(orderPayload.customer)) {
+              const cus = await dbQuery('plugin::users-permissions.user').findOne({
+                where: { documentId: orderPayload.customer },
+                select: ['id'],
+                transacting: trx,
+              });
+              orderPayload.customer = cus ? cus.id : null;
+            }
+          } else if (orderPayload.phone) {
+            // Auto-vincular o auto-crear usuario basado en el número de teléfono
+            const existingUser = await dbQuery('plugin::users-permissions.user').findOne({
+              where: { phone: orderPayload.phone },
               select: ['id'],
               transacting: trx,
             });
-            orderPayload.customer = cus ? cus.id : null;
+
+            if (existingUser) {
+              orderPayload.customer = existingUser.id;
+            } else if (orderPayload.clientName) {
+              // Generar email falso para satisfacer a Strapi users-permissions
+              const fakeEmail = `${orderPayload.phone.replace(/\D/g, '')}@cliente.local`;
+              
+              const userByEmail = await dbQuery('plugin::users-permissions.user').findOne({
+                where: { email: fakeEmail },
+                select: ['id'],
+                transacting: trx,
+              });
+
+              if (!userByEmail) {
+                // Obtener el rol Client por defecto
+                const defaultRole = await dbQuery('plugin::users-permissions.role').findOne({
+                  where: { type: 'client' },
+                  select: ['id'],
+                  transacting: trx,
+                });
+
+                // Crear el perfil del usuario de forma silenciosa
+                const newUser = await dbQuery('plugin::users-permissions.user').create({
+                  data: {
+                    username: orderPayload.clientName + '-' + Math.floor(Math.random() * 1000),
+                    email: fakeEmail,
+                    password: crypto.randomBytes(12).toString('hex'), // Clave aleatoria, no podrán entrar
+                    phone: orderPayload.phone,
+                    name: orderPayload.clientName || null, // Asumiendo inyección del campo 'name'
+                    adress: orderPayload.adress || null,
+                    city: orderPayload.city || null,
+                    confirmed: true,
+                    blocked: false,
+                    role: defaultRole ? defaultRole.id : null,
+                  },
+                  transacting: trx,
+                });
+                
+                orderPayload.customer = newUser.id;
+              }
+            }
           }
 
           if (orderPayload.performedBy && typeof orderPayload.performedBy === 'string' && !/^\d+$/.test(orderPayload.performedBy)) {
@@ -240,7 +291,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               transacting: trx,
             });
           } else {
-            // Strapi v5 needs documentId, locale, and status manually populated when bypassing Document Service
+            // Strapi v5 needs documentId and locale manually populated when bypassing Document Service
             orderPayload.documentId = crypto.randomBytes(12).toString('hex');
             orderPayload.locale = 'es';
             
