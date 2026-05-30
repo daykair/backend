@@ -731,7 +731,7 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     description: '';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     slug: Schema.Attribute.UID;

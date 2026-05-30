@@ -1,4 +1,5 @@
 import { factories } from '@strapi/strapi';
+import * as crypto from 'crypto';
 
 const ORDER_FIELDS = [
   'slug',
@@ -89,6 +90,10 @@ function buildOrderPayload(orderData: any, payments: any[]) {
   if (!payload.orderPlaced) {
     payload.orderPlaced = new Date().toISOString();
   }
+
+  // Ensure Strapi v5 Document Service recognizes the row as published
+  payload.publishedAt = new Date().toISOString();
+  payload.status = 'published';
 
   return payload;
 }
@@ -235,6 +240,10 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               transacting: trx,
             });
           } else {
+            // Strapi v5 needs documentId, locale, and status manually populated when bypassing Document Service
+            orderPayload.documentId = crypto.randomBytes(12).toString('hex');
+            orderPayload.locale = 'es';
+            
             savedOrder = await dbQuery('api::order.order').create({
               data: orderPayload,
               transacting: trx,

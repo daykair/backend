@@ -106,7 +106,7 @@ export default {
     try {
       await publishDraftOrders(strapi);
     } catch (err: any) {
-      throw new console.error('[Migration] Error al publicar órdenes en draft:', err.message);
+      throw new Error(`[Migration] Error al publicar órdenes en draft: ${err.message}`);
     }
 
     // 2.2 Migración de órdenes JSON antiguo a nuevo JSON estructurado
