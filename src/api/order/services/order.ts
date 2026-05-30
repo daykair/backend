@@ -24,7 +24,7 @@ const ORDER_FIELDS = [
 ];
 
 function normalizeIdentifier(value: any) {
-  if (value === undefined || value === null) {
+  if (value === undefined || value === null || value === '') {
     return null;
   }
 
@@ -69,7 +69,11 @@ function buildOrderPayload(orderData: any, payments: any[]) {
 
   for (const field of ORDER_FIELDS) {
     if (orderData[field] !== undefined) {
-      payload[field] = orderData[field];
+      if (['customer', 'performedBy', 'dispatchWarehouse'].includes(field)) {
+         payload[field] = normalizeIdentifier(orderData[field]);
+      } else {
+         payload[field] = orderData[field];
+      }
     }
   }
 
@@ -122,136 +126,140 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
       const lookupValue = orderData.id ?? orderData.documentId;
 
       return await strapi.db.transaction(async (trx) => {
-        const orderPayload = buildOrderPayload(orderData, payments);
-        const where = lookupValue ? buildWhere(lookupValue) : null;
-        
-        const existingOrder = where
-          ? await dbQuery('api::order.order').findOne({
-              where,
+        try {
+          const orderPayload = buildOrderPayload(orderData, payments);
+          const where = lookupValue ? buildWhere(lookupValue) : null;
+          
+          const existingOrder = where
+            ? await dbQuery('api::order.order').findOne({
+                where,
+                select: ['id'],
+                transacting: trx,
+              })
+            : null;
+
+          // RESOLVER RELACIONES: db.query requiere IDs internos (numéricos), no documentIds.
+          if (orderPayload.dispatchWarehouse && typeof orderPayload.dispatchWarehouse === 'string' && !/^\d+$/.test(orderPayload.dispatchWarehouse)) {
+            const dw = await dbQuery('api::warehouse.warehouse').findOne({
+              where: { documentId: orderPayload.dispatchWarehouse },
               select: ['id'],
               transacting: trx,
-            })
-          : null;
+            });
+            orderPayload.dispatchWarehouse = dw ? dw.id : null;
+          }
 
-        let savedOrder: any;
-        if (existingOrder) {
-          savedOrder = await dbQuery('api::order.order').update({
-            where: { id: existingOrder.id },
-            data: orderPayload,
-            transacting: trx,
+          if (orderPayload.customer && typeof orderPayload.customer === 'string' && !/^\d+$/.test(orderPayload.customer)) {
+            const cus = await dbQuery('plugin::users-permissions.user').findOne({
+              where: { documentId: orderPayload.customer },
+              select: ['id'],
+              transacting: trx,
+            });
+            orderPayload.customer = cus ? cus.id : null;
+          }
+
+          if (orderPayload.performedBy && typeof orderPayload.performedBy === 'string' && !/^\d+$/.test(orderPayload.performedBy)) {
+            const pb = await dbQuery('plugin::users-permissions.user').findOne({
+              where: { documentId: orderPayload.performedBy },
+              select: ['id'],
+              transacting: trx,
+            });
+            orderPayload.performedBy = pb ? pb.id : null;
+          }
+
+          const productIds = items.map((item: any) => normalizeIdentifier(item.productId)).filter(Boolean);
+          const colorIds = items.map((item: any) => normalizeIdentifier(item.colorId)).filter(Boolean);
+
+          const [products, colors] = await Promise.all([
+            productIds.length > 0
+              ? dbQuery('api::product.product').findMany({
+                  where: buildOrFilters(productIds) || undefined,
+                  select: ['id', 'documentId', 'title', 'costPrice'],
+                  transacting: trx,
+                })
+              : [],
+            colorIds.length > 0
+              ? dbQuery('api::color.color').findMany({
+                  where: buildOrFilters(colorIds) || undefined,
+                  select: ['id', 'documentId', 'name'],
+                  transacting: trx,
+                })
+              : [],
+          ]);
+
+          const productMap = new Map<string, any>();
+          products.forEach((product: any) => {
+            if (product.id !== undefined) productMap.set(String(product.id), product);
+            if (product.documentId) productMap.set(String(product.documentId), product);
           });
 
-          if (hasOrderItems) {
-            await dbQuery('api::order-item.order-item').deleteMany({
-              where: { order: existingOrder.id },
+          const colorMap = new Map<string, any>();
+          colors.forEach((color: any) => {
+            if (color.id !== undefined) colorMap.set(String(color.id), color);
+            if (color.documentId) colorMap.set(String(color.documentId), color);
+          });
+
+          const orderItems = items.map((item: any) => {
+            const product = productMap.get(String(normalizeIdentifier(item.productId)));
+            const color = colorMap.get(String(normalizeIdentifier(item.colorId)));
+            const quantity = Number(item.quantity) || 1;
+
+            return {
+              productName: item.productName || item.title || product?.title || 'Producto',
+              colorName: item.colorName || item.selectedColor || color?.name || 'N/A',
+              quantity,
+              unitPrice: Number(item.unitPrice ?? item.price ?? 0),
+              unitCost:
+                item.unitCost !== undefined && item.unitCost !== null
+                  ? Number(item.unitCost)
+                  : Number(product?.costPrice || 0),
+              product: product?.id ?? null,
+              color: color?.id ?? null,
+            };
+          });
+
+          const paymentRecords = payments.map((payment: any) => ({
+            amount: Number(payment.amount) || 0,
+            method: payment.method || 'Efectivo',
+            reference: payment.reference || '',
+            status: payment.status || 'confirmed',
+          }));
+
+          orderPayload.orderItems = orderItems;
+          orderPayload.paymentRecords = paymentRecords;
+
+          let savedOrder: any;
+          if (existingOrder) {
+            savedOrder = await dbQuery('api::order.order').update({
+              where: { id: existingOrder.id },
+              data: orderPayload,
+              transacting: trx,
+            });
+          } else {
+            savedOrder = await dbQuery('api::order.order').create({
+              data: orderPayload,
               transacting: trx,
             });
           }
 
-          if (hasPayments) {
-            await dbQuery('api::payment.payment').deleteMany({
-              where: { order: existingOrder.id },
-              transacting: trx,
-            });
+          if (!savedOrder || !savedOrder.id) {
+            throw new Error('No se pudo guardar la orden');
           }
-        } else {
-          savedOrder = await dbQuery('api::order.order').create({
-            data: {
-              ...orderPayload,
-              publishedAt: new Date().toISOString(),
-            },
+
+          await this.processInventoryStockAndExpense(savedOrder, orderItems, trx);
+
+          const result = await dbQuery('api::order.order').findOne({
+            where: { id: savedOrder.id },
+            populate: ['dispatchWarehouse', 'customer', 'performedBy'],
             transacting: trx,
           });
+
+          return result;
+        } catch (e) {
+          console.error('------- TRANSACTION ERROR DETECTED -------');
+          console.error(e);
+          console.error('------------------------------------------');
+          throw e;
         }
-
-        if (!savedOrder || !savedOrder.id) {
-          throw new Error('No se pudo guardar la orden');
-        }
-
-        const productIds = items.map((item: any) => normalizeIdentifier(item.productId)).filter(Boolean);
-        const colorIds = items.map((item: any) => normalizeIdentifier(item.colorId)).filter(Boolean);
-
-        const [products, colors] = await Promise.all([
-          productIds.length > 0
-            ? dbQuery('api::product.product').findMany({
-                where: buildOrFilters(productIds) || undefined,
-                select: ['id', 'documentId', 'title', 'name', 'costPrice'],
-                transacting: trx,
-              })
-            : [],
-          colorIds.length > 0
-            ? dbQuery('api::color.color').findMany({
-                where: buildOrFilters(colorIds) || undefined,
-                select: ['id', 'documentId', 'name', 'title'],
-                transacting: trx,
-              })
-            : [],
-        ]);
-
-        const productMap = new Map<string, any>();
-        products.forEach((product: any) => {
-          if (product.id !== undefined) productMap.set(String(product.id), product);
-          if (product.documentId) productMap.set(String(product.documentId), product);
-        });
-
-        const colorMap = new Map<string, any>();
-        colors.forEach((color: any) => {
-          if (color.id !== undefined) colorMap.set(String(color.id), color);
-          if (color.documentId) colorMap.set(String(color.documentId), color);
-        });
-
-        const orderItems = items.map((item: any) => {
-          const product = productMap.get(String(normalizeIdentifier(item.productId)));
-          const color = colorMap.get(String(normalizeIdentifier(item.colorId)));
-          const quantity = Number(item.quantity) || 1;
-
-          return {
-            productName: item.productName || item.title || product?.title || product?.name || 'Producto',
-            colorName: item.colorName || item.selectedColor || color?.name || color?.title || 'N/A',
-            quantity,
-            unitPrice: Number(item.unitPrice ?? item.price ?? 0),
-            unitCost:
-              item.unitCost !== undefined && item.unitCost !== null
-                ? Number(item.unitCost)
-                : Number(product?.costPrice || 0),
-            order: savedOrder.id,
-            product: product?.id ?? null,
-            color: color?.id ?? null,
-          };
-        });
-
-        for (const orderItem of orderItems) {
-          await dbQuery('api::order-item.order-item').create({
-            data: orderItem,
-            transacting: trx,
-          });
-        }
-
-        const paymentRecords = payments.map((payment: any) => ({
-          amount: Number(payment.amount) || 0,
-          method: payment.method || 'Efectivo',
-          reference: payment.reference || '',
-          status: payment.status || 'confirmed',
-          order: savedOrder.id,
-        }));
-
-        for (const paymentRecord of paymentRecords) {
-          await dbQuery('api::payment.payment').create({
-            data: paymentRecord,
-            transacting: trx,
-          });
-        }
-
-        // Llamamos al método del inventario usando `this` correctamente
-        await this.processInventoryStockAndExpense(savedOrder, orderItems, trx);
-
-        const result = await dbQuery('api::order.order').findOne({
-          where: { id: savedOrder.id },
-          populate: ['orderItems', 'payments'],
-          transacting: trx,
-        });
-
-        return result;
       });
     },
 
@@ -274,31 +282,31 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         dispatchWarehouse = normalizeIdentifier(fullOrder?.dispatchWarehouse || null);
       }
 
-      if (dispatchWarehouse && isNumericIdentifier(dispatchWarehouse)) {
+      if (dispatchWarehouse && !isNumericIdentifier(dispatchWarehouse)) {
         const warehouse = await dbQuery('api::warehouse.warehouse').findOne({
-          where: { id: Number(dispatchWarehouse) },
-          select: ['documentId'],
+          where: { documentId: dispatchWarehouse },
+          select: ['id'],
           transacting: trx,
         });
-        if (warehouse?.documentId) {
-          dispatchWarehouse = warehouse.documentId;
+        if (warehouse?.id) {
+          dispatchWarehouse = warehouse.id;
         }
       }
 
       if (!dispatchWarehouse) {
         const mainWarehouse = await dbQuery('api::warehouse.warehouse').findOne({
           where: { code: 'MAIN' },
-          select: ['documentId'],
+          select: ['id'],
           transacting: trx,
         });
         if (mainWarehouse) {
-          dispatchWarehouse = mainWarehouse.documentId;
+          dispatchWarehouse = mainWarehouse.id;
         }
       }
 
       const reasonMatches: any[] = [];
       if (orderId) reasonMatches.push({ order: orderId });
-      if (orderDocId) reasonMatches.push({ order: orderDocId });
+      if (orderDocId) reasonMatches.push({ order: { documentId: orderDocId } });
       reasonMatches.push({ reason: { $contains: `Pedido #${orderDocId || orderId}` } });
 
       const existingSale = await dbQuery('api::inventory-movement.inventory-movement').findOne({

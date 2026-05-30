@@ -7,7 +7,7 @@ function cookieOptions(isRefresh = false) {
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: 'strict',
     maxAge: isRefresh ? REFRESH_TTL_MS : ACCESS_TTL_MS,
     path: '/',
   };

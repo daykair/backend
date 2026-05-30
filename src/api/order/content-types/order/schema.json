@@ -104,16 +104,10 @@
       "target": "api::warehouse.warehouse"
     },
     "orderItems": {
-      "type": "relation",
-      "relation": "oneToMany",
-      "target": "api::order-item.order-item",
-      "mappedBy": "order"
+      "type": "json"
     },
-    "payments": {
-      "type": "relation",
-      "relation": "oneToMany",
-      "target": "api::payment.payment",
-      "mappedBy": "order"
+    "paymentRecords": {
+      "type": "json"
     }
   }
 }

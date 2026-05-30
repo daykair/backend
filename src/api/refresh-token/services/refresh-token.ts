@@ -16,7 +16,10 @@ export default ({ strapi }: any) => ({
   },
 
   async findByHash(tokenHash: string) {
-    const row = await strapi.db.query('api::refresh-token.refresh-token').findOne({ where: { tokenHash } });
+    const row = await strapi.db.query('api::refresh-token.refresh-token').findOne({
+      where: { tokenHash },
+      populate: ['user']
+    });
     return row;
   },
 

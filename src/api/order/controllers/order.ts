@@ -83,8 +83,6 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
         populate: {
           ...((ctx.query.populate as any) || {}),
           performedBy: true,
-          orderItems: true,
-          payments: true,
           dispatchWarehouse: true,
           customer: true,
         },
