@@ -10,8 +10,8 @@
 - **Refactorización de Órdenes:**
   - El esquema de `order` (`schema.json`) fue actualizado para reflejar su nueva naturaleza relacional.
   - La lógica de negocio compleja fue extraída de los *lifecycles* y movida a un servicio centralizado (`api/order/services/order.ts`) haciendo el código más mantenible.
-  - Se introdujeron esquemas para ítems de orden (`order-item`) y pagos (`payment`).
 - **Políticas de Acceso:** Ajustes en políticas como `is-admin.ts` para alinearse con los nuevos permisos.
 
-## Cambios en Proceso (No confirmados)
-- No hay cambios en progreso registrados en el backend. El estado del repositorio se encuentra limpio y alineado con la última versión de la rama.
+
+## Cambios Recientes
+- **API de Roles (admin-role) Extensión**: Se añadieron los endpoints `POST /api/admin-roles` y `DELETE /api/admin-roles/:id` en el controlador para permitir creación y eliminación de roles desde el frontend, incluyendo validaciones críticas de seguridad (protección de roles del sistema y validación de usuarios vinculados).

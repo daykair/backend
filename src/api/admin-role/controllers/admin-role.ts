@@ -102,5 +102,94 @@ export default {
     } catch (err: any) {
       return ctx.badRequest(err.message || 'Error al guardar el rol y sus permisos.');
     }
+  },
+
+  async createRole(ctx: any) {
+    const { name, description, permissions } = ctx.request.body;
+
+    if (!name || typeof name !== 'string' || name.trim().length < 3) {
+      return ctx.badRequest('El nombre del rol es requerido y debe tener al menos 3 caracteres.');
+    }
+
+    if (description && typeof description !== 'string') {
+      return ctx.badRequest('La descripción debe ser un texto válido.');
+    }
+
+    if (!permissions || typeof permissions !== 'object') {
+      return ctx.badRequest('La estructura de permisos enviada no es válida.');
+    }
+
+    const sanitizedPermissions: Record<string, any> = {};
+
+    for (const [resourceKey, resourceVal] of Object.entries(permissions)) {
+      if (!resourceKey.startsWith('api::') && !resourceKey.startsWith('plugin::')) {
+        continue;
+      }
+
+      if (resourceVal && typeof resourceVal === 'object' && 'controllers' in resourceVal) {
+        const controllerObj = (resourceVal as any).controllers;
+        sanitizedPermissions[resourceKey] = { controllers: {} };
+
+        for (const [controllerName, controllerVal] of Object.entries(controllerObj)) {
+          if (controllerVal && typeof controllerVal === 'object') {
+            sanitizedPermissions[resourceKey].controllers[controllerName] = {};
+
+            for (const [actionName, actionVal] of Object.entries(controllerVal)) {
+              if (actionVal && typeof actionVal === 'object' && 'enabled' in actionVal) {
+                sanitizedPermissions[resourceKey].controllers[controllerName][actionName] = {
+                  enabled: Boolean((actionVal as any).enabled)
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+
+    try {
+      const newRole = await strapi.plugin('users-permissions').service('role').createRole({
+        name: name.trim(),
+        description: description ? description.trim() : '',
+        users: [],
+        permissions: sanitizedPermissions,
+      });
+
+      return ctx.send({ message: 'Rol creado correctamente.', role: newRole });
+    } catch (err: any) {
+      return ctx.badRequest(err.message || 'Error al crear el rol.');
+    }
+  },
+
+  async deleteRole(ctx: any) {
+    const { id } = ctx.params;
+    
+    try {
+      const role = await strapi.plugin('users-permissions').service('role').findOne(id);
+      
+      if (!role) {
+        return ctx.notFound('Rol no encontrado.');
+      }
+      
+      // Prevent deleting system roles
+      const systemRoles = ['admin', 'public', 'authenticated', 'client'];
+      if (systemRoles.includes(role.type?.toLowerCase())) {
+        return ctx.badRequest('No se pueden eliminar los roles del sistema.');
+      }
+
+      // Check if there are users assigned to this role
+      const userCount = await strapi.db.query('plugin::users-permissions.user').count({
+        where: { role: role.id }
+      });
+
+      if (userCount > 0) {
+        return ctx.badRequest('No se puede eliminar un rol que tiene usuarios asignados. Reasigna a los usuarios primero.');
+      }
+
+      await strapi.plugin('users-permissions').service('role').deleteRole(id);
+      
+      return ctx.send({ message: 'Rol eliminado correctamente.' });
+    } catch (err: any) {
+      return ctx.badRequest(err.message || 'Error al eliminar el rol.');
+    }
   }
 };

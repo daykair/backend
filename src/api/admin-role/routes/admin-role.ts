@@ -35,6 +35,24 @@ export default {
         auth: false,
         policies: ['global::is-admin']
       }
+    },
+    {
+      method: 'POST',
+      path: '/admin-roles',
+      handler: 'admin-role.createRole',
+      config: {
+        auth: false,
+        policies: ['global::is-admin']
+      }
+    },
+    {
+      method: 'DELETE',
+      path: '/admin-roles/:id',
+      handler: 'admin-role.deleteRole',
+      config: {
+        auth: false,
+        policies: ['global::is-admin']
+      }
     }
   ]
 };

@@ -49,17 +49,29 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
             throw new PolicyError('Usuario no encontrado');
         }
 
-        // Configuración de roles: por defecto se permite 'superadmin', 'admin' y 'authenticated'
-        const allowedRoles = config?.roles || ['superadmin', 'admin', 'authenticated'];
-        const userRole = user.role?.type || user.role?.name?.toLowerCase();
+        // Configuración de roles: Lista negra de roles que no son administrativos
+        const forbiddenRoles = ['public', 'client', 'cliente', 'customer', 'authenticated'];
+        const userRole = (user.role?.type || user.role?.name || '').toLowerCase();
 
-        if (allowedRoles.includes(userRole)) {
+        let isAllowed = false;
+
+        if (config?.roles && Array.isArray(config.roles)) {
+            // Si la ruta especifica explícitamente los roles permitidos, respetarlo
+            isAllowed = config.roles.includes(userRole);
+        } else {
+            // Por defecto, permitimos cualquier rol que NO esté en la lista negra.
+            // Esto asegura que roles personalizados (ej. "Vendedor", "Cajero") creados
+            // desde tu panel pasen esta política, y luego Strapi filtre sus acciones CRUD.
+            isAllowed = !forbiddenRoles.includes(userRole);
+        }
+
+        if (isAllowed) {
             policyContext.state.user = user; // Guardar en state por si el controlador lo necesita
             return true;
         }
 
-        console.error(`[is-admin policy] Acceso denegado: El rol '${userRole}' no está en la lista de permitidos (${allowedRoles.join(', ')})`);
-        throw new PolicyError('Acceso denegado: Solo administradores.');
+        console.error(`[is-admin policy] Acceso denegado: El rol '${userRole}' no tiene privilegios administrativos.`);
+        throw new PolicyError('Acceso denegado: Solo personal autorizado.');
     } catch (err: any) {
         console.error('[is-admin policy] Excepción capturada:', err.message || err);
         throw new PolicyError('Token inválido o expirado');

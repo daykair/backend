@@ -28,10 +28,12 @@ Rutas personalizadas (definidas en `src/api/**/routes/*.ts`)
   - POST `/api/purchase-orders-admin/process-full` — `api::purchase-order.purchase-order.processPurchaseOrderFull` (procesa orden de compra y ajustes de inventario dentro de una transacción).
 
 - **Roles administrativos**
-  - GET  `/api/admin-roles` — `admin-role.getRoles` (policy: `api::admin-role.is-admin`).
-  - GET  `/api/admin-roles/permissions-tree` — `admin-role.getPermissionsTree` (lista acciones/permissions disponibles).
-  - GET  `/api/admin-roles/:id` — `admin-role.getRole` (detalle de rol).
-  - PUT  `/api/admin-roles/:id` — `admin-role.updateRole` (actualiza nombre/descripcion/permissions).
+  - GET    `/api/admin-roles` — `admin-role.getRoles` (policy: `api::admin-role.is-admin`).
+  - GET    `/api/admin-roles/permissions-tree` — `admin-role.getPermissionsTree` (lista acciones/permissions disponibles).
+  - GET    `/api/admin-roles/:id` — `admin-role.getRole` (detalle de rol).
+  - POST   `/api/admin-roles` — `admin-role.createRole` (crea un nuevo rol personalizado).
+  - PUT    `/api/admin-roles/:id` — `admin-role.updateRole` (actualiza nombre/descripcion/permissions).
+  - DELETE `/api/admin-roles/:id` — `admin-role.deleteRole` (elimina rol, previene borrar roles del sistema).
 
 - **Caja (cash-register)**
   - GET  `/api/cash-registers` — listar cierres.
