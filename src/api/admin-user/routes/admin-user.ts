@@ -6,7 +6,9 @@ export default {
       handler: 'admin-user.getUsers',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
@@ -15,7 +17,9 @@ export default {
       handler: 'admin-user.createUser',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
@@ -24,7 +28,9 @@ export default {
       handler: 'admin-user.updateUser',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
@@ -33,7 +39,9 @@ export default {
       handler: 'admin-user.deleteUser',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     }
   ]

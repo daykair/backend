@@ -27,6 +27,12 @@ Rutas personalizadas (definidas en `src/api/**/routes/*.ts`)
   - GET  `/api/purchase-orders-admin` — `api::purchase-order.purchase-order.findAdmin` (lista con `supplier` poblado).
   - POST `/api/purchase-orders-admin/process-full` — `api::purchase-order.purchase-order.processPurchaseOrderFull` (procesa orden de compra y ajustes de inventario dentro de una transacción).
 
+- **Usuarios Administrativos (admin-user)**
+  - GET    `/api/admin-users` — `admin-user.getUsers` (lista usuarios, requiere rol admin).
+  - POST   `/api/admin-users` — `admin-user.createUser` (crea usuario y envía correo, requiere rol admin).
+  - PUT    `/api/admin-users/:id` — `admin-user.updateUser` (actualiza datos, requiere rol admin).
+  - DELETE `/api/admin-users/:id` — `admin-user.deleteUser` (elimina usuario, requiere rol admin).
+
 - **Roles administrativos**
   - GET    `/api/admin-roles` — `admin-role.getRoles` (policy: `api::admin-role.is-admin`).
   - GET    `/api/admin-roles/permissions-tree` — `admin-role.getPermissionsTree` (lista acciones/permissions disponibles).
@@ -61,9 +67,7 @@ Content-types principales y su plural (usar para construir las rutas CRUD):
 - `warehouse` → `warehouses`
 - `warehouse-stock` → `warehouse-stocks`
 - `inventory-movement` → `inventory-movements`
-- `order-item` → `order-items`
 - `purchase-order` → `purchase-orders`
-- `payment` → `payments`
 - `expense` → `expenses`
 - `cash-register` → `cash-registers`
 - `supplier` → `suppliers`

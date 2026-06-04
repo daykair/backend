@@ -3,7 +3,10 @@ export default {
     try {
       const users = await strapi.entityService.findMany('plugin::users-permissions.user', {
         populate: ['role'],
-        sort: { createdAt: 'DESC' }
+        sort: { createdAt: 'desc' },
+        filters: {
+          role: { type: { $ne: 'client' } }
+        }
       });
 
       // Remove sensitive fields like password before sending
@@ -47,6 +50,35 @@ export default {
         provider: 'local'
       });
 
+      // Send Welcome Email
+      try {
+        await strapi.plugin('email').service('email').send({
+          to: newUser.email,
+          from: process.env.SMTP_DEFAULT_FROM,
+          subject: '¡Bienvenido al Panel de Administración!',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+              <h2 style="color: #4f46e5; margin-top: 0;">¡Hola, ${newUser.username}!</h2>
+              <p style="font-size: 16px; color: #334155; line-height: 1.6;">
+                Te han creado una cuenta de administrador en el sistema. Ya puedes acceder al panel de control para gestionar la tienda.
+              </p>
+              
+              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; border-radius: 8px; margin: 24px 0;">
+                <p style="margin: 0 0 8px 0; font-size: 14px; color: #64748b; font-weight: bold; text-transform: uppercase;">Tus Credenciales de Acceso:</p>
+                <p style="margin: 0 0 4px 0; font-size: 15px; color: #0f172a;"><strong>Correo:</strong> ${newUser.email}</p>
+                <p style="margin: 0; font-size: 15px; color: #0f172a;"><strong>Contraseña:</strong> ${password}</p>
+              </div>
+
+              <p style="font-size: 14px; color: #64748b; line-height: 1.6; margin-bottom: 0;">
+                <em>Recomendación de Seguridad: Guarda este correo o memoriza tu contraseña. En tu primer inicio de sesión, te sugerimos cambiarla por una propia.</em>
+              </p>
+            </div>
+          `,
+        });
+      } catch (emailErr: any) {
+        console.error('No se pudo enviar el correo de bienvenida:', emailErr.message || emailErr);
+      }
+
       // Remove sensitive info
       const { password: _p, ...safeUser } = newUser;
 
@@ -79,12 +111,13 @@ export default {
 
       // Check if email or username is taken by another user
       if (updateData.email || updateData.username) {
+        const orConditions = [];
+        if (updateData.email) orConditions.push({ email: updateData.email });
+        if (updateData.username) orConditions.push({ username: updateData.username });
+
         const existingUser = await strapi.db.query('plugin::users-permissions.user').findOne({
           where: {
-            $or: [
-              updateData.email ? { email: updateData.email } : {},
-              updateData.username ? { username: updateData.username } : {}
-            ],
+            $or: orConditions,
             id: { $ne: id }
           }
         });
@@ -109,7 +142,7 @@ export default {
     const { id } = ctx.params;
 
     try {
-      const user = await strapi.entityService.findOne('plugin::users-permissions.user', id, {
+      const user: any = await strapi.entityService.findOne('plugin::users-permissions.user', id, {
         populate: ['role']
       });
 

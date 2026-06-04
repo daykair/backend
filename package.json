@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@strapi/plugin-cloud": "5.0.0",
 		"@strapi/plugin-users-permissions": "5.0.0",
+		"@strapi/provider-email-nodemailer": "^5.47.0",
 		"@strapi/provider-upload-aws-s3": "^5.44.0",
 		"@strapi/strapi": "5.0.0",
 		"@strapi/utils": "^5.46.1",

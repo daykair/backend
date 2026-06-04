@@ -15,3 +15,17 @@
 
 ## Cambios Recientes
 - **API de Roles (admin-role) Extensión**: Se añadieron los endpoints `POST /api/admin-roles` y `DELETE /api/admin-roles/:id` en el controlador para permitir creación y eliminación de roles desde el frontend, incluyendo validaciones críticas de seguridad (protección de roles del sistema y validación de usuarios vinculados).
+
+- **Eliminacion de Esquemas Payment y OrderItem**:
+  - Se eliminaron los esquemas `payment` y `order-item` del backend.
+  - Se eliminaron los lifecycles asociados a estos esquemas.
+  - Se eliminaron las rutas asociadas a estos esquemas.
+
+## Cambios en Proceso (No confirmados)
+- **Gestión de Correos y Notificaciones**:
+  - Integración del proveedor `@strapi/provider-email-nodemailer` y `nodemailer` para el envío de correos.
+  - Envío automático de correo de bienvenida con credenciales al crear nuevos usuarios administradores.
+- **Seguridad y Usuarios (Admin)**:
+  - Ajustes en las políticas de acceso `global::is-admin` para requerir explícitamente el rol `admin` (`{ roles: ['admin'] }`) en las rutas de `admin-role` y `admin-user`.
+  - Validaciones de duplicidad (`$or` query en `updateUser`) para email y username.
+  - Listado de usuarios administradores ordenado de forma descendente por fecha de creación y filtrado para excluir a los clientes (`role: { type: { $ne: 'customer' } }`), separando limpiamente el acceso interno de los compradores.

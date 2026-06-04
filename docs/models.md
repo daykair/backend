@@ -90,29 +90,8 @@ A continuación se listan los content-types principales y sus atributos más rel
 - **customer**: `relation manyToOne` → `plugin::users-permissions.user`
 - **exchangeRate**, **shippingCost**: `decimal`
 - **dispatchWarehouse**: `relation manyToOne` → `api::warehouse.warehouse`
-- **orderItems**: `relation oneToMany` → `api::order-item.order-item`
-- **payments**: `relation oneToMany` → `api::payment.payment`
-
----
-
-## Order Item (`order-item`) — plural: `order-items`
-- **productName**: `string`
-- **colorName**: `string`
-- **quantity**: `integer`
-- **unitPrice**: `decimal`
-- **unitCost**: `decimal`
-- **order**: `relation manyToOne` → `api::order.order`
-- **product**: `relation manyToOne` → `api::product.product`
-- **color**: `relation manyToOne` → `api::color.color`
-
----
-
-## Payment (`payment`) — plural: `payments`
-- **amount**: `decimal`
-- **method**: `string`
-- **reference**: `string`
-- **status**: `string`
-- **order**: `relation manyToOne` → `api::order.order`
+- **orderItems**: `JSON`
+- **paymentsRecords**: `JSON`
 
 ---
 

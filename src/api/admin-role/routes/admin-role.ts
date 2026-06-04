@@ -6,7 +6,9 @@ export default {
       handler: 'admin-role.getRoles',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
@@ -15,7 +17,9 @@ export default {
       handler: 'admin-role.getPermissionsTree',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
@@ -24,7 +28,9 @@ export default {
       handler: 'admin-role.getRole',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
@@ -33,7 +39,9 @@ export default {
       handler: 'admin-role.updateRole',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
+        ]
       }
     },
     {
