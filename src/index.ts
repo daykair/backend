@@ -24,6 +24,9 @@ export default {
    * your application gets started.
    */
   async bootstrap({ strapi }: { strapi: any }) {
+    // Force Koa proxy trust for reverse proxies (Render, Nginx, etc)
+    strapi.server.app.proxy = true;
+
     // 1. Ejecutar una actualización inicial en segundo plano al arrancar si es necesario
     try {
       const existing = await strapi.documents('api::exchange-rate.exchange-rate').findFirst();
