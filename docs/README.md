@@ -1,7 +1,7 @@
 # Documentación del backend (Strapi)
 
 Resumen breve
-- **Stack**: Strapi (versión definida en `backend/package.json`), Node.js 18+.
+- **Stack**: Strapi (versión definida en `backend/package.json`), Node.js 20.
 - **Propósito**: API y administración para la tienda (productos, pedidos, inventario, compras, finanzas).
 
 Quickstart (desde la raíz del proyecto)

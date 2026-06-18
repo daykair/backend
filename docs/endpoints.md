@@ -2,101 +2,65 @@
 
 Prefijo base: `/api` (el helper `fetchAPI` del panel administrativo concatena `STRAPI_URL + /api + path`).
 
-Rutas personalizadas (definidas en `src/api/**/routes/*.ts`)
+## Rutas personalizadas (definidas en `src/api/**/routes/*.ts`)
 
-- **Productos (admin)**
-  - GET  `/api/products-admin` — `api::product.product.findAdmin` (config: `auth: false`, policy: `global::is-admin`).
-  - GET  `/api/products-admin/:id` — `api::product.product.findOneAdmin` (config: `auth: false`, policy: `global::is-admin`).
-  - POST `/api/products-admin/save-full` — `api::product.product.saveFull` (guarda producto y variantes en una operación transaccional).
+### Autenticación y Sesiones
+- **POST** `/auth/local-cookie`: Inicia sesión, valida credenciales y setea `strapi_jwt` y `refresh_token` como cookies HttpOnly.
+- **POST** `/auth/refresh`: Valida el `refresh_token` actual, lo rota por uno nuevo y emite un nuevo `strapi_jwt`.
+- **POST** `/auth/logout`: Revoca el `refresh_token` actual y limpia las cookies.
+- **GET** `/sessions`: Lista todas las sesiones activas (refresh tokens) del usuario actual (con IP y User-Agent).
+- **POST** `/sessions/:id/revoke`: Permite al usuario revocar una sesión específica (o cualquiera si es admin).
 
-- **Pedidos (admin / proceso)**
-  - GET  `/api/orders-admin` — `api::order.order.findAdmin` (listado con `orderItems`, `payments`, `performedBy`, `dispatchWarehouse`, `customer` poblados).
-  - POST `/api/orders-admin/process-full` — `api::order.order.processOrderFull` (valida payload y delega a `order` service para procesar pedido y ajustes de stock).
+### Productos (admin)
+- **GET** `/products-admin` — `api::product.product.findAdmin` (Puebla inventario y variantes. Policy: `global::is-admin`).
+- **GET** `/products-admin/:id` — `api::product.product.findOneAdmin`
+- **POST** `/products-admin/save-full` — `api::product.product.saveFull` (Guarda producto y variantes en una operación transaccional).
+- **POST** `/products-admin/validate-stock` — Validación rápida de existencias antes del checkout.
 
-- **Tasa de cambio**
-  - POST `/api/exchange-rate/sync` — `api::exchange-rate.exchange-rate.sync` (forzar sincronización BCV).
-  - GET  `/api/exchange-rates` — CRUD core (`createCoreRouter`) con `find` expuesto sin autenticación según `routes/exchange-rate.ts`.
+### Pedidos y Proceso de Compra
+- **GET** `/orders-admin` — `api::order.order.findAdmin` (Listado con relaciones expandidas: `orderItems`, `payments`, `customer`, etc.).
+- **POST** `/orders-admin/process-full` — `api::order.order.processOrderFull` (Procesa el pedido completo, actualiza estados y ajusta inventario en una sola transacción segura).
 
-- **Gastos (admin)**
-  - GET  `/api/expenses-admin` — `api::expense.expense.findAdmin` (policy: `global::is-admin` con rol `admin`).
-  - POST `/api/expenses-admin` — `api::expense.expense.createAdmin` (policy: `global::is-admin`).
-  - PUT  `/api/expenses-admin/:id` — `api::expense.expense.updateAdmin` (policy: `global::is-admin`).
-  - DELETE `/api/expenses-admin/:id` — `api::expense.expense.deleteAdmin` (policy: `global::is-admin`).
+### Gastos (admin)
+- **GET** `/expenses-admin` — `api::expense.expense.findAdmin`
+- **POST** `/expenses-admin` — `api::expense.expense.createAdmin`
+- **PUT** `/expenses-admin/:id` — `api::expense.expense.updateAdmin`
+- **DELETE** `/expenses-admin/:id` — `api::expense.expense.deleteAdmin`
 
-- **Órdenes de compra**
-  - GET  `/api/purchase-orders-admin` — `api::purchase-order.purchase-order.findAdmin` (lista con `supplier` poblado).
-  - POST `/api/purchase-orders-admin/process-full` — `api::purchase-order.purchase-order.processPurchaseOrderFull` (procesa orden de compra y ajustes de inventario dentro de una transacción).
+### Órdenes de compra a Proveedores
+- **GET** `/purchase-orders-admin` — `api::purchase-order.purchase-order.findAdmin`
+- **POST** `/purchase-orders-admin/process-full` — Procesa orden de compra y ajusta el inventario simultáneamente.
 
-- **Usuarios Administrativos (admin-user)**
-  - GET    `/api/admin-users` — `admin-user.getUsers` (lista usuarios, requiere rol admin).
-  - POST   `/api/admin-users` — `admin-user.createUser` (crea usuario y envía correo, requiere rol admin).
-  - PUT    `/api/admin-users/:id` — `admin-user.updateUser` (actualiza datos, requiere rol admin).
-  - DELETE `/api/admin-users/:id` — `admin-user.deleteUser` (elimina usuario, requiere rol admin).
+### Configuración (Tasa de cambio)
+- **POST** `/exchange-rate/sync` — Fuerza la sincronización con el BCV.
+- **GET** `/exchange-rates` — Obtiene la tasa de cambio actual.
 
-- **Roles administrativos**
-  - GET    `/api/admin-roles` — `admin-role.getRoles` (policy: `api::admin-role.is-admin`).
-  - GET    `/api/admin-roles/permissions-tree` — `admin-role.getPermissionsTree` (lista acciones/permissions disponibles).
-  - GET    `/api/admin-roles/:id` — `admin-role.getRole` (detalle de rol).
-  - POST   `/api/admin-roles` — `admin-role.createRole` (crea un nuevo rol personalizado).
-  - PUT    `/api/admin-roles/:id` — `admin-role.updateRole` (actualiza nombre/descripcion/permissions).
-  - DELETE `/api/admin-roles/:id` — `admin-role.deleteRole` (elimina rol, previene borrar roles del sistema).
+### Usuarios Administrativos (admin-user)
+- **GET** `/admin-users` — Lista de usuarios.
+- **POST** `/admin-users` — Crea un usuario administrativo y envía credenciales por correo.
+- **PUT** `/admin-users/:id` — Actualiza usuario.
+- **DELETE** `/admin-users/:id` — Elimina usuario.
 
-- **Caja (cash-register)**
-  - GET  `/api/cash-registers` — listar cierres.
-  - GET  `/api/cash-registers/:id` — detalle.
-  - POST `/api/cash-registers` — crear cierre.
-  - PUT  `/api/cash-registers/:id` — actualizar.
-  - DELETE `/api/cash-registers/:id` — eliminar.
-  - Nota: estas rutas están expuestas en el router custom; revisar controles de acceso en la política global o el frontend que llama estos endpoints.
+### Roles y Permisos
+- **GET** `/admin-roles` — Lista de roles.
+- **GET** `/admin-roles/permissions-tree` — Árbol estructurado de permisos disponibles en el sistema.
+- **GET** `/admin-roles/:id` — Detalle de rol con sus permisos asociados.
+- **POST** `/admin-roles` — Crea un nuevo rol.
+- **PUT** `/admin-roles/:id` — Edita permisos y nombre del rol.
+- **DELETE** `/admin-roles/:id` — Elimina rol.
 
-Rutas CRUD automáticas (content-types)
+## Rutas CRUD Automáticas (Content-types)
 
-Los content-types definidos con `factories.createCoreRouter(...)` exponen rutas REST convencionales bajo `/api/{plural}`. Ejemplos (reemplazar `{plural}` por el `pluralName` del content-type):
+Generadas por el `createCoreRouter` de Strapi. La mayoría requieren token de autorización (Authorization Bearer), inyectado internamente por el middleware `cookie-to-bearer` a partir de la cookie HttpOnly.
 
-- GET  `/api/{plural}` — listar (acepta `populate`, `filters`, `sort`, `pagination`).
-- GET  `/api/{plural}/{id}` — obtener por id.
-- POST `/api/{plural}` — crear (payload: `{ "data": { ... } }`).
-- PUT  `/api/{plural}/{id}` — actualizar (payload: `{ "data": { ... } }`).
-- DELETE `/api/{plural}/{id}` — eliminar.
+Ejemplos (reemplazar `{plural}` por el `pluralName`):
+- **GET** `/api/{plural}` — Listar (acepta `populate`, `filters`, `sort`, `pagination`).
+- **GET** `/api/{plural}/{id}` — Obtener por id.
+- **POST** `/api/{plural}` — Crear (payload: `{ "data": { ... } }`).
+- **PUT** `/api/{plural}/{id}` — Actualizar.
+- **DELETE** `/api/{plural}/{id}` — Eliminar.
 
-Content-types principales y su plural (usar para construir las rutas CRUD):
-- `product` → `products`
-- `order` → `orders`
-- `category` → `categories`
-- `color` → `colors`
-- `warehouse` → `warehouses`
-- `warehouse-stock` → `warehouse-stocks`
-- `inventory-movement` → `inventory-movements`
-- `purchase-order` → `purchase-orders`
-- `expense` → `expenses`
-- `cash-register` → `cash-registers`
-- `supplier` → `suppliers`
-- `exchange-rate` → `exchange-rates`
-
-Autenticación y ejemplo de uso
-
-- Login (plugin `users-permissions`):
-  - POST `/api/auth/local` con `{ identifier, password }` → respuesta con `{ jwt }`.
-  - Incluir header `Authorization: Bearer <jwt>` en peticiones protegidas.
-
-Ejemplo cURL (login + petición protegida):
-
-```bash
-# Login
-curl -s -X POST "http://localhost:1337/api/auth/local" \
-  -H "Content-Type: application/json" \
-  -d '{"identifier":"usuario@example.com","password":"tu-pass"}'
-
-# Supongamos que obtuviste el token JWT en $JWT
-curl -s -X GET "http://localhost:1337/api/orders-admin" \
-  -H "Authorization: Bearer $JWT"
-```
-
-Limitaciones
-- Las rutas expuestas dependen de las políticas y de la configuración de usuario/plugin. Revisa `backend/src/policies/is-admin.ts` para la lógica de autorización usada en rutas administrativas.
-- Para endpoints con payloads complejos (por ejemplo `processOrderFull` o `saveFull`) revisa los controladores y servicios para conocer la estructura exacta del `data` esperado.
-
-Referencias rápidas
-- Carpetas: [backend/src/api](backend/src/api)
-- Políticas: [backend/src/policies/is-admin.ts](backend/src/policies/is-admin.ts#L1-L200)
-- Ejemplo de llamadas desde panel admin: [admin/src/lib/api.ts](admin/src/lib/api.ts#L1-L200)
+**Listado de Plurales Disponibles:**
+- `products`, `orders`, `categories`, `colors`
+- `warehouses`, `warehouse-stocks`, `inventory-movements`
+- `purchase-orders`, `suppliers`, `expenses`, `cash-registers`, `exchange-rates`

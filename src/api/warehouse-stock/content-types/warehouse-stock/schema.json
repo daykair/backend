@@ -13,7 +13,7 @@
   "pluginOptions": {},
   "attributes": {
     "stock": {
-      "type": "integer",
+      "type": "decimal",
       "required": true,
       "default": 0
     },

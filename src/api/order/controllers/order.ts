@@ -112,4 +112,59 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
       ctx.throw(500, err.message || 'Error al procesar el pedido')
     }
   },
+
+  async addPayment(ctx) {
+    try {
+      const { id } = ctx.params;
+      const { amount, method, reference, status } = ctx.request.body.data || ctx.request.body;
+
+      if (!amount || !method) {
+        return ctx.throw(400, 'Monto y método son requeridos para un abono');
+      }
+
+      const filters = !isNaN(Number(id)) ? { id: Number(id) } : { documentId: String(id) };
+
+      const orderList = await strapi.documents('api::order.order').findMany({
+        filters,
+        populate: ['customer', 'performedBy', 'dispatchWarehouse']
+      });
+      const order = orderList && orderList.length > 0 ? orderList[0] : null;
+
+      if (!order) {
+        return ctx.throw(404, 'Orden no encontrada');
+      }
+
+      const paymentRecords = Array.isArray(order.paymentRecords) ? [...order.paymentRecords] : [];
+      paymentRecords.push({
+        amount: Number(amount),
+        method,
+        reference: reference || '',
+        status: status || 'confirmed',
+        date: new Date().toISOString()
+      });
+
+      const newAmountPaid = (Number(order.amountPaid) || 0) + Number(amount);
+      const isFullyPaid = newAmountPaid >= (Number(order.orderTotal) || 0);
+
+      const updateData: any = {
+        paymentRecords,
+        amountPaid: newAmountPaid,
+      };
+
+      if (isFullyPaid && order.orderStatus !== 'payment_confirmed' && order.orderStatus !== 'delivered') {
+        updateData.orderStatus = 'payment_confirmed';
+      }
+
+      const updatedOrder = await strapi.documents('api::order.order').update({
+        documentId: order.documentId,
+        data: updateData,
+        populate: ['customer', 'performedBy', 'dispatchWarehouse']
+      });
+
+      return ctx.send({ data: updatedOrder });
+    } catch (err: any) {
+      console.error('[OrderProcess] Error en addPayment:', err);
+      ctx.throw(500, err.message || 'Error al registrar el abono');
+    }
+  },
 }))

@@ -28,6 +28,10 @@
     "isActive": {
       "type": "boolean"
     },
+    "isWeighed": {
+      "type": "boolean",
+      "default": false
+    },
     "isFeaturedNew": {
       "type": "boolean"
     },

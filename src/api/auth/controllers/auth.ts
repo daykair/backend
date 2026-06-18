@@ -7,7 +7,6 @@ function cookieOptions(isRefresh = false) {
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    secureProxy: true,
     sameSite: 'strict',
     maxAge: isRefresh ? REFRESH_TTL_MS : ACCESS_TTL_MS,
     path: '/',
@@ -81,6 +80,14 @@ export default {
       }
 
       if (tokenRow.revoked) {
+        // Add a 15-second grace period for concurrent refresh requests
+        const revokedTime = tokenRow.revokedAt ? new Date(tokenRow.revokedAt).getTime() : 0;
+        if (Date.now() - revokedTime < 15000) {
+          // It was recently revoked, likely a concurrent refresh request.
+          // Don't revoke everything, just deny this specific attempt so the client retries with the new token.
+          return ctx.unauthorized('Concurrent refresh detected');
+        }
+
         // Possible token reuse / theft: revoke all user's tokens
         try {
           const userId = tokenRow.user && (tokenRow.user.id || tokenRow.user) ? (tokenRow.user.id || tokenRow.user) : null;

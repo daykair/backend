@@ -113,4 +113,33 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             return ctx.badRequest('Error saving product and variants' + " " + error.message);
         }
     },
+
+    async validateStock(ctx) {
+        const { items } = ctx.request.body.data || {};
+        if (!items || !Array.isArray(items)) {
+            return ctx.badRequest('Items array is required');
+        }
+
+        const errors = [];
+        for (const item of items) {
+            const color = await strapi.documents('api::color.color').findOne({
+                documentId: item.colorId
+            });
+
+            if (!color) {
+                errors.push(`La variante ${item.selectedColor || ''} del producto ${item.title} ya no existe.`);
+                continue;
+            }
+
+            if (Number(color.stock) < Number(item.quantity)) {
+                errors.push(`Stock insuficiente para ${item.title} (${item.selectedColor || ''}). Pedidos: ${item.quantity}, Disponibles: ${color.stock}.`);
+            }
+        }
+
+        if (errors.length > 0) {
+            return ctx.send({ success: false, errors });
+        }
+
+        return ctx.send({ success: true });
+    }
 }));

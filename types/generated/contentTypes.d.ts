@@ -512,6 +512,7 @@ export interface ApiCashRegisterCashRegister
     actualBalance: Schema.Attribute.Decimal & Schema.Attribute.Required;
     difference: Schema.Attribute.Decimal & Schema.Attribute.Required;
     notes: Schema.Attribute.Text;
+    breakdown: Schema.Attribute.JSON;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -573,7 +574,7 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
   };
   attributes: {
     name: Schema.Attribute.String & Schema.Attribute.Required;
-    stock: Schema.Attribute.Integer & Schema.Attribute.Required;
+    stock: Schema.Attribute.Decimal & Schema.Attribute.Required;
     product: Schema.Attribute.Relation<'manyToOne', 'api::product.product'>;
     images: Schema.Attribute.Media<
       'images' | 'files' | 'videos' | 'audios',
@@ -690,7 +691,7 @@ export interface ApiInventoryMovementInventoryMovement
   };
   attributes: {
     color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
-    quantity: Schema.Attribute.Integer;
+    quantity: Schema.Attribute.Decimal;
     type: Schema.Attribute.Enumeration<['IN', 'OUT']> &
       Schema.Attribute.Required;
     reason: Schema.Attribute.String;
@@ -799,6 +800,7 @@ export interface ApiProductProduct extends Struct.CollectionTypeSchema {
     title: Schema.Attribute.String;
     description: Schema.Attribute.Text;
     isActive: Schema.Attribute.Boolean;
+    isWeighed: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
     isFeaturedNew: Schema.Attribute.Boolean;
     productImage: Schema.Attribute.Media<
       'images' | 'files' | 'videos' | 'audios',
@@ -1003,7 +1005,7 @@ export interface ApiWarehouseStockWarehouseStock
     draftAndPublish: false;
   };
   attributes: {
-    stock: Schema.Attribute.Integer &
+    stock: Schema.Attribute.Decimal &
       Schema.Attribute.Required &
       Schema.Attribute.DefaultTo<0>;
     warehouse: Schema.Attribute.Relation<

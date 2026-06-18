@@ -18,5 +18,14 @@ export default {
         policies: ['global::is-admin'],
       },
     },
+    {
+      method: 'PUT',
+      path: '/orders-admin/:id/add-payment',
+      handler: 'api::order.order.addPayment',
+      config: {
+        auth: false,
+        policies: ['global::is-admin'],
+      },
+    },
   ],
 };

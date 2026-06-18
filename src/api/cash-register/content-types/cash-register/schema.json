@@ -38,6 +38,9 @@
     },
     "notes": {
       "type": "text"
+    },
+    "breakdown": {
+      "type": "json"
     }
   }
 }

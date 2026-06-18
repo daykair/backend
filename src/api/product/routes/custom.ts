@@ -26,6 +26,15 @@ export default {
                 auth: false,
                 policies: ['global::is-admin']
             }
+        },
+        {
+            method: 'POST',
+            path: '/products-admin/validate-stock',
+            handler: 'api::product.product.validateStock',
+            config: {
+                auth: false,
+                policies: ['global::is-admin']
+            }
         }
     ]
 }

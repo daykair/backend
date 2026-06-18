@@ -19,7 +19,7 @@
       "inversedBy": "inventory_movements"
     },
     "quantity": {
-      "type": "integer",
+      "type": "decimal",
       "required": false
     },
     "type": {
