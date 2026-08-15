@@ -73,7 +73,13 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
                         const colorName = colorEntity.name || 'N/A';
                         const orderIdentifier = savedOrder.reference || savedOrder.id || savedOrder.documentId;
                         
-                        const enrichedReason = `${adj.reason.replace('undefined', orderIdentifier)} - Item: ${productTitle} (${colorName})`;
+                        // Si el front manda un placeholder explícito como {order_id}, lo reemplazamos. 
+                        // Si no, simplemente anexamos el ID de la orden.
+                        let baseReason = adj.reason || 'Ajuste de Inventario';
+                        baseReason = baseReason.replace('{order_id}', orderIdentifier);
+                        baseReason = baseReason.replace('#undefined', `#${orderIdentifier}`); // Fallback for old frontend behavior
+
+                        const enrichedReason = `${baseReason} - Item: ${productTitle} (${colorName})`;
 
                         // A. Crear Movimiento de Inventario
                         // El lifecycle de inventory-movement se encargará de sumar el stock al color
