@@ -235,5 +235,32 @@ export default factories.createCoreController('api::product.product', ({ strapi 
         }
 
         return ctx.send({ success: true });
+    },
+
+    async uploadAdmin(ctx, next) {
+        try {
+            console.log('[uploadAdmin] Recibida solicitud de subida de archivo para personal administrativo');
+            const files = (ctx.request as any).files?.files;
+            console.log('[uploadAdmin] Archivos recibidos:', {
+                hasFiles: Boolean(files),
+                isArray: Array.isArray(files),
+                count: Array.isArray(files) ? files.length : (files ? 1 : 0),
+                fileName: Array.isArray(files) ? files[0]?.name : files?.name,
+                fileSize: Array.isArray(files) ? files[0]?.size : files?.size
+            });
+
+            await (strapi.plugin('upload').controller('content-api') as any).upload(ctx, next);
+            console.log('[uploadAdmin] Subida completada exitosamente. Status:', ctx.status);
+            return ctx.body;
+        } catch (err: any) {
+            console.error('[uploadAdmin] Error procesando subida de archivo:', {
+                message: err?.message,
+                name: err?.name,
+                status: err?.status,
+                stack: err?.stack,
+                details: err?.details
+            });
+            throw err;
+        }
     }
 }));

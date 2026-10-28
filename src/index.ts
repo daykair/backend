@@ -104,7 +104,39 @@ export default {
     } catch (err: any) {
       console.error('[Migration] Error crítico en la migración de inventarios:', err.message);
     }
-    // 3. Programar la rutina diaria de raspado a las 12:00 AM (Medianoche) Hora de Caracas
+
+    // 3. Asegurar permisos de subida de archivos (upload) para roles autorizados
+    try {
+      const uploadActions = [
+        'plugin::upload.content-api.upload',
+        'plugin::upload.content-api.find',
+        'plugin::upload.content-api.findOne',
+        'plugin::upload.content-api.destroy'
+      ];
+      const roles = await strapi.db.query('plugin::users-permissions.role').findMany();
+      if (roles && Array.isArray(roles)) {
+        for (const role of roles) {
+          // No permitir a usuarios anónimos/públicos por seguridad
+          if (role.type === 'public') continue;
+
+          for (const action of uploadActions) {
+            const existingPerm = await strapi.db.query('plugin::users-permissions.permission').findOne({
+              where: { role: role.id, action }
+            });
+            if (!existingPerm) {
+              await strapi.db.query('plugin::users-permissions.permission').create({
+                data: { action, role: role.id }
+              });
+              console.log(`[Bootstrap Permissions] Concedido permiso "${action}" al rol "${role.name || role.type}" (ID: ${role.id})`);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[Bootstrap Permissions] Error al asegurar permisos de subida:', err.message);
+    }
+
+    // 4. Programar la rutina diaria de raspado a las 12:00 AM (Medianoche) Hora de Caracas
     scheduleDailyBcvUpdate(strapi);
   },
 };
