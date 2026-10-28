@@ -19,11 +19,36 @@ export default factories.createCoreController('api::product.product', ({ strapi 
     },
     async findOneAdmin(ctx) {
         try {
+            let targetDocId = ctx.params.id;
+            if (targetDocId && !isNaN(Number(targetDocId))) {
+                const foundProduct = await strapi.documents('api::product.product').findFirst({
+                    filters: { id: Number(targetDocId) } as any
+                });
+                if (foundProduct) {
+                    targetDocId = foundProduct.documentId;
+                }
+            }
+
             const product = await strapi.documents('api::product.product').findOne({
-                documentId: ctx.params.id,
+                documentId: targetDocId,
+                populate: {
+                    categories: true,
+                    colors: {
+                        populate: {
+                            images: true,
+                            warehouse_stocks: {
+                                populate: {
+                                    warehouse: true
+                                }
+                            }
+                        }
+                    },
+                    productImage: true,
+                    ...((ctx.query.populate as any) || {})
+                },
                 ...ctx.query
-            })
-            return ctx.send({ data: product })
+            });
+            return ctx.send({ data: product });
         } catch (err) {
             ctx.body = err;
         }
@@ -31,12 +56,26 @@ export default factories.createCoreController('api::product.product', ({ strapi 
     async saveFull(ctx) {
         const { productData, variantsData } = ctx.request.body.data;
         let productId = productData.documentId || productData.id;
+        
+        // Resolve numeric productId to documentId if necessary
+        if (productId && !isNaN(Number(productId))) {
+            const foundProduct = await strapi.documents('api::product.product').findFirst({
+                filters: { id: Number(productId) } as any
+            });
+            if (foundProduct) {
+                productId = foundProduct.documentId;
+            }
+        }
+
         let isNewProduct = !productId;
         let savedProduct = null;
 
         try {
             // 1. Create or Update Product
             const { id: _pid, documentId: _pdocId, ...cleanProductData } = productData;
+            if (cleanProductData.productCode !== undefined) {
+                cleanProductData.productCode = cleanProductData.productCode?.trim() || null;
+            }
 
             if (isNewProduct) {
                 savedProduct = await strapi.documents('api::product.product').create({ 
@@ -44,9 +83,13 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 });
                 productId = savedProduct.documentId;
             } else {
+                const updateProductData: any = { ...cleanProductData };
+                if (Array.isArray(updateProductData.categories)) {
+                    updateProductData.categories = { set: updateProductData.categories };
+                }
                 savedProduct = await strapi.documents('api::product.product').update({
                     documentId: productId,
-                    data: cleanProductData
+                    data: updateProductData
                 });
             }
 
@@ -57,10 +100,12 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
             const variantsToKeep = variantsData
                 .filter(v => v.id)
-                .map(v => v.id);
+                .map(v => String(v.id));
 
             // Delete variants that are no longer in the list and their images
-            const variantsToDelete = currentVariants.filter((cv: any) => !variantsToKeep.includes(cv.documentId));
+            const variantsToDelete = currentVariants.filter((cv: any) => 
+                !variantsToKeep.includes(String(cv.documentId)) && !variantsToKeep.includes(String(cv.id))
+            );
             for (const v of variantsToDelete) {
                 // Fetch the variant to get attached images
                 const variantWithImages = await strapi.documents('api::color.color').findOne({
@@ -86,22 +131,71 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             if (variantsData && Array.isArray(variantsData) && variantsData.length > 0) {
                 for (const variant of variantsData) {
                     if (variant.id) {
-                        const { id, ...dataToUpdate } = variant;
+                        const { id, images, ...dataToUpdate } = variant;
+                        const updateData: any = { ...dataToUpdate };
+                        
+                        if (updateData.code) {
+                            updateData.code = String(updateData.code).replace(/#/g, '').slice(0, 6) || '000000';
+                        }
+                        if (updateData.name) {
+                            updateData.name = String(updateData.name).trim() || 'Estándar';
+                        }
+                        if (updateData.stock !== undefined) {
+                            updateData.stock = Number(updateData.stock) || 0;
+                        }
+
+                        if (images !== undefined) {
+                            const cleanImages = Array.isArray(images) 
+                                ? images.filter(img => img !== null && img !== undefined && img !== '')
+                                : images;
+                            updateData.images = Array.isArray(cleanImages) ? { set: cleanImages } : cleanImages;
+                        }
+
+                        let targetVariantDocId = String(variant.id);
+                        if (!isNaN(Number(targetVariantDocId))) {
+                            const foundColor = await strapi.documents('api::color.color').findFirst({
+                                filters: { id: Number(targetVariantDocId) } as any
+                            });
+                            if (foundColor) {
+                                targetVariantDocId = foundColor.documentId;
+                            }
+                        }
+
                         await strapi.documents('api::color.color').update({
-                            documentId: variant.id,
-                            data: dataToUpdate
+                            documentId: targetVariantDocId,
+                            data: updateData
                         });
                     } else {
-                        const { id, ...dataToCreate } = variant;
+                        const { id, images, ...dataToCreate } = variant;
+                        const createData: any = { ...dataToCreate, product: productId };
+                        
+                        if (createData.code) {
+                            createData.code = String(createData.code).replace(/#/g, '').slice(0, 6) || '000000';
+                        }
+                        if (createData.name) {
+                            createData.name = String(createData.name).trim() || 'Estándar';
+                        }
+                        if (createData.stock !== undefined) {
+                            createData.stock = Number(createData.stock) || 0;
+                        }
+
+                        if (images !== undefined) {
+                            const cleanImages = Array.isArray(images) 
+                                ? images.filter(img => img !== null && img !== undefined && img !== '')
+                                : images;
+                            createData.images = Array.isArray(cleanImages) ? { set: cleanImages } : cleanImages;
+                        }
+
                         await strapi.documents('api::color.color').create({
-                            data: { ...dataToCreate, product: productId }
+                            data: createData
                         });
                     }
                 }
             }
 
             return ctx.send({ success: true, data: savedProduct });
-        } catch (error) {
+        } catch (error: any) {
+            console.error('[saveFull Error]:', error);
             // Rollback only if it was a new product creation
             if (isNewProduct && savedProduct && savedProduct.documentId) {
                 try {
@@ -110,7 +204,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     console.error("Rollback failed:", e);
                 }
             }
-            return ctx.badRequest('Error saving product and variants' + " " + error.message);
+            return ctx.badRequest('Error saving product and variants: ' + (error.message || error));
         }
     },
 
