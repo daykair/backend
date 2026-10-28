@@ -183,7 +183,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                             const cleanImages = Array.isArray(images) 
                                 ? images.filter(img => img !== null && img !== undefined && img !== '')
                                 : images;
-                            createData.images = Array.isArray(cleanImages) ? { set: cleanImages } : cleanImages;
+                            createData.images = cleanImages;
                         }
 
                         await strapi.documents('api::color.color').create({
