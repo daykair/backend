@@ -5,6 +5,7 @@ const ORDER_FIELDS = [
   'slug',
   'adress',
   'city',
+  'state',
   'deliveryMethod',
   'email',
   'method',
@@ -24,6 +25,15 @@ const ORDER_FIELDS = [
   'dispatchWarehouse',
 ];
 
+function normalizeOrderStatus(status?: string): string | undefined {
+  if (!status) return status;
+  const trimmed = status.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'pendiente por pago') return 'pending';
+  if (lower === 'verification_failed') return 'failed_verification';
+  return trimmed;
+}
+
 function normalizeIdentifier(value: any) {
   if (value === undefined || value === null || value === '') {
     return null;
@@ -39,7 +49,10 @@ function normalizeIdentifier(value: any) {
 }
 
 function isNumericIdentifier(value: any) {
-  return typeof value === 'number' || (typeof value === 'string' && /^[0-9]+$/.test(value.toString()));
+  return (
+    typeof value === 'number' ||
+    (typeof value === 'string' && /^[0-9]+$/.test(value.toString()))
+  );
 }
 
 function buildWhere(value: any) {
@@ -71,15 +84,20 @@ function buildOrderPayload(orderData: any, payments: any[]) {
   for (const field of ORDER_FIELDS) {
     if (orderData[field] !== undefined) {
       if (['customer', 'performedBy', 'dispatchWarehouse'].includes(field)) {
-         payload[field] = normalizeIdentifier(orderData[field]);
+        payload[field] = normalizeIdentifier(orderData[field]);
+      } else if (field === 'orderStatus') {
+        payload[field] = normalizeOrderStatus(orderData[field]);
       } else {
-         payload[field] = orderData[field];
+        payload[field] = orderData[field];
       }
     }
   }
 
   if (payments.length > 0) {
-    payload.amountPaid = payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+    payload.amountPaid = payments.reduce(
+      (sum, payment) => sum + (Number(payment.amount) || 0),
+      0,
+    );
     if (payments.length > 1) {
       payload.method = 'Múltiple';
     } else if (payments[0]?.method) {
@@ -109,7 +127,6 @@ function buildOrderMovementItems(items: any[]) {
 }
 
 export default factories.createCoreService('api::order.order', ({ strapi }) => {
-  // Tipamos correctamente el query engine de Strapi para evitar problemas de TypeScript
   const dbQuery = (uid: string) => (strapi.db as any).query(uid);
 
   return {
@@ -126,25 +143,44 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         : Array.isArray(orderData.payment)
         ? orderData.payment
         : [];
-      const hasOrderItems = Array.isArray(orderData.items) || Array.isArray(orderData.order) || Array.isArray(orderData.orderItems);
-      const hasPayments = Array.isArray(orderData.payments) || Array.isArray(orderData.payment);
+      const hasOrderItems =
+        Array.isArray(orderData.items) ||
+        Array.isArray(orderData.order) ||
+        Array.isArray(orderData.orderItems);
+      const hasPayments =
+        Array.isArray(orderData.payments) || Array.isArray(orderData.payment);
       const lookupValue = orderData.id ?? orderData.documentId;
 
       return await strapi.db.transaction(async (trx) => {
         try {
           const orderPayload = buildOrderPayload(orderData, payments);
           const where = lookupValue ? buildWhere(lookupValue) : null;
-          
+
           const existingOrder = where
             ? await dbQuery('api::order.order').findOne({
                 where,
-                select: ['id'],
+                select: [
+                  'id',
+                  'documentId',
+                  'orderStatus',
+                  'orderType',
+                  'orderTotal',
+                  'amountPaid',
+                  'method',
+                  'paymentReference',
+                  'orderItems',
+                  'paymentRecords',
+                ],
                 transacting: trx,
               })
             : null;
 
           // RESOLVER RELACIONES: db.query requiere IDs internos (numéricos), no documentIds.
-          if (orderPayload.dispatchWarehouse && typeof orderPayload.dispatchWarehouse === 'string' && !/^\d+$/.test(orderPayload.dispatchWarehouse)) {
+          if (
+            orderPayload.dispatchWarehouse &&
+            typeof orderPayload.dispatchWarehouse === 'string' &&
+            !/^\d+$/.test(orderPayload.dispatchWarehouse)
+          ) {
             const dw = await dbQuery('api::warehouse.warehouse').findOne({
               where: { documentId: orderPayload.dispatchWarehouse },
               select: ['id'],
@@ -154,8 +190,10 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           }
 
           if (orderPayload.customer) {
-            // Resolver ID si se envía un documentId
-            if (typeof orderPayload.customer === 'string' && !/^\d+$/.test(orderPayload.customer)) {
+            if (
+              typeof orderPayload.customer === 'string' &&
+              !/^\d+$/.test(orderPayload.customer)
+            ) {
               const cus = await dbQuery('plugin::users-permissions.user').findOne({
                 where: { documentId: orderPayload.customer },
                 select: ['id'],
@@ -174,9 +212,8 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             if (existingUser) {
               orderPayload.customer = existingUser.id;
             } else if (orderPayload.clientName) {
-              // Generar email falso para satisfacer a Strapi users-permissions
               const fakeEmail = `${orderPayload.phone.replace(/\D/g, '')}@cliente.local`;
-              
+
               const userByEmail = await dbQuery('plugin::users-permissions.user').findOne({
                 where: { email: fakeEmail },
                 select: ['id'],
@@ -184,21 +221,20 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               });
 
               if (!userByEmail) {
-                // Obtener el rol Client por defecto
                 const defaultRole = await dbQuery('plugin::users-permissions.role').findOne({
                   where: { type: 'client' },
                   select: ['id'],
                   transacting: trx,
                 });
 
-                // Crear el perfil del usuario de forma silenciosa
                 const newUser = await dbQuery('plugin::users-permissions.user').create({
                   data: {
-                    username: orderPayload.clientName + '-' + Math.floor(Math.random() * 1000),
+                    username:
+                      orderPayload.clientName + '-' + Math.floor(Math.random() * 1000),
                     email: fakeEmail,
-                    password: crypto.randomBytes(12).toString('hex'), // Clave aleatoria, no podrán entrar
+                    password: crypto.randomBytes(12).toString('hex'),
                     phone: orderPayload.phone,
-                    name: orderPayload.clientName || null, // Asumiendo inyección del campo 'name'
+                    name: orderPayload.clientName || null,
                     adress: orderPayload.adress || null,
                     city: orderPayload.city || null,
                     confirmed: true,
@@ -207,13 +243,17 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                   },
                   transacting: trx,
                 });
-                
+
                 orderPayload.customer = newUser.id;
               }
             }
           }
 
-          if (orderPayload.performedBy && typeof orderPayload.performedBy === 'string' && !/^\d+$/.test(orderPayload.performedBy)) {
+          if (
+            orderPayload.performedBy &&
+            typeof orderPayload.performedBy === 'string' &&
+            !/^\d+$/.test(orderPayload.performedBy)
+          ) {
             const pb = await dbQuery('plugin::users-permissions.user').findOne({
               where: { documentId: orderPayload.performedBy },
               select: ['id'],
@@ -222,66 +262,153 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             orderPayload.performedBy = pb ? pb.id : null;
           }
 
-          const productIds = items.map((item: any) => normalizeIdentifier(item.productId)).filter(Boolean);
-          const colorIds = items.map((item: any) => normalizeIdentifier(item.colorId)).filter(Boolean);
+          let orderItems = Array.isArray(existingOrder?.orderItems)
+            ? existingOrder.orderItems
+            : [];
 
-          const [products, colors] = await Promise.all([
-            productIds.length > 0
-              ? dbQuery('api::product.product').findMany({
-                  where: buildOrFilters(productIds) || undefined,
-                  select: ['id', 'documentId', 'title', 'costPrice'],
-                  transacting: trx,
-                })
-              : [],
-            colorIds.length > 0
-              ? dbQuery('api::color.color').findMany({
-                  where: buildOrFilters(colorIds) || undefined,
-                  select: ['id', 'documentId', 'name'],
-                  transacting: trx,
-                })
-              : [],
-          ]);
+          if (hasOrderItems && items.length > 0) {
+            const productIds = items
+              .map((item: any) => normalizeIdentifier(item.productId))
+              .filter(Boolean);
+            const colorIds = items
+              .map((item: any) => normalizeIdentifier(item.colorId))
+              .filter(Boolean);
 
-          const productMap = new Map<string, any>();
-          products.forEach((product: any) => {
-            if (product.id !== undefined) productMap.set(String(product.id), product);
-            if (product.documentId) productMap.set(String(product.documentId), product);
-          });
+            const [products, colors] = await Promise.all([
+              productIds.length > 0
+                ? dbQuery('api::product.product').findMany({
+                    where: buildOrFilters(productIds) || undefined,
+                    select: ['id', 'documentId', 'title', 'costPrice'],
+                    transacting: trx,
+                  })
+                : [],
+              colorIds.length > 0
+                ? dbQuery('api::color.color').findMany({
+                    where: buildOrFilters(colorIds) || undefined,
+                    select: ['id', 'documentId', 'name'],
+                    populate: ['images'],
+                    transacting: trx,
+                  })
+                : [],
+            ]);
 
-          const colorMap = new Map<string, any>();
-          colors.forEach((color: any) => {
-            if (color.id !== undefined) colorMap.set(String(color.id), color);
-            if (color.documentId) colorMap.set(String(color.documentId), color);
-          });
+            const productMap = new Map<string, any>();
+            products.forEach((product: any) => {
+              if (product.id !== undefined) productMap.set(String(product.id), product);
+              if (product.documentId) productMap.set(String(product.documentId), product);
+            });
 
-          const orderItems = items.map((item: any) => {
-            const product = productMap.get(String(normalizeIdentifier(item.productId)));
-            const color = colorMap.get(String(normalizeIdentifier(item.colorId)));
-            const quantity = Number(item.quantity) || 1;
+            const colorMap = new Map<string, any>();
+            colors.forEach((color: any) => {
+              if (color.id !== undefined) colorMap.set(String(color.id), color);
+              if (color.documentId) colorMap.set(String(color.documentId), color);
+            });
 
-            return {
-              productName: item.productName || item.title || product?.title || 'Producto',
-              colorName: item.colorName || item.selectedColor || color?.name || 'N/A',
-              quantity,
-              unitPrice: Number(item.unitPrice ?? item.price ?? 0),
-              unitCost:
-                item.unitCost !== undefined && item.unitCost !== null
-                  ? Number(item.unitCost)
-                  : Number(product?.costPrice || 0),
-              product: product?.id ?? null,
-              color: color?.id ?? null,
-            };
-          });
+            // Map existing items to preserve productImage if not sent in partial updates
+            const existingItemImageMap = new Map<string, string>();
+            if (Array.isArray(existingOrder?.orderItems)) {
+              existingOrder.orderItems.forEach((exItem: any) => {
+                const key = `${exItem.product || exItem.productId}-${exItem.color || exItem.colorId}`;
+                if (exItem.productImage) existingItemImageMap.set(key, exItem.productImage);
+              });
+            }
 
-          const paymentRecords = payments.map((payment: any) => ({
-            amount: Number(payment.amount) || 0,
-            method: payment.method || 'Efectivo',
-            reference: payment.reference || '',
-            status: payment.status || 'confirmed',
-          }));
+            orderItems = items.map((item: any) => {
+              const product = productMap.get(String(normalizeIdentifier(item.productId)));
+              const color = colorMap.get(String(normalizeIdentifier(item.colorId)));
+              const quantity = Number(item.quantity) || 1;
 
-          orderPayload.orderItems = orderItems;
-          orderPayload.paymentRecords = paymentRecords;
+              const colorFirstImg =
+                color?.images?.[0]?.formats?.thumbnail?.url ||
+                color?.images?.[0]?.formats?.small?.url ||
+                color?.images?.[0]?.url ||
+                '';
+              const lookupKey = `${product?.id || item.productId}-${color?.id || item.colorId}`;
+
+              return {
+                productName: item.productName || item.title || product?.title || 'Producto',
+                colorName: item.colorName || item.selectedColor || color?.name || 'N/A',
+                quantity,
+                unitPrice: Number(item.unitPrice ?? item.price ?? 0),
+                unitCost:
+                  item.unitCost !== undefined && item.unitCost !== null
+                    ? Number(item.unitCost)
+                    : Number(product?.costPrice || 0),
+                product: product?.id ?? null,
+                color: color?.id ?? null,
+                productImage:
+                  item.productImage ||
+                  existingItemImageMap.get(lookupKey) ||
+                  colorFirstImg ||
+                  '',
+                priceType: item.priceType || 'detal',
+              };
+            });
+
+            orderPayload.orderItems = orderItems;
+          }
+
+          // Manejo inteligente de pagos y confirmaciones de órdenes web
+          const effectiveOrderType =
+            orderPayload.orderType || existingOrder?.orderType || 'regular';
+          const effectiveStatus =
+            orderPayload.orderStatus || existingOrder?.orderStatus || 'pending';
+          const effectiveTotal = Number(
+            orderPayload.orderTotal ?? existingOrder?.orderTotal ?? 0,
+          );
+
+          if (hasPayments && payments.length > 0) {
+            const paymentRecords = payments.map((payment: any) => ({
+              amount: Number(payment.amount) || 0,
+              method: payment.method || 'Efectivo',
+              reference: payment.reference || '',
+              currency: payment.currency || 'USD',
+              status: payment.status || 'confirmed',
+              date: payment.date || new Date().toISOString(),
+            }));
+            orderPayload.paymentRecords = paymentRecords;
+          } else if (existingOrder) {
+            const existingRecords = Array.isArray(existingOrder.paymentRecords)
+              ? existingOrder.paymentRecords
+              : [];
+            const isConfirming =
+              effectiveStatus === 'payment_confirmed' || effectiveStatus === 'delivered';
+
+            if (isConfirming && existingRecords.length === 0) {
+              const rawMethod = orderPayload.method || existingOrder.method || 'Pago Móvil';
+              const normalizedMethod =
+                rawMethod === 'pago-movil'
+                  ? 'Pago Móvil'
+                  : rawMethod === 'binance'
+                  ? 'Binance'
+                  : rawMethod === 'cashea'
+                  ? 'Cashea'
+                  : rawMethod;
+              const paidAmount =
+                effectiveOrderType === 'regular'
+                  ? effectiveTotal
+                  : Number(orderPayload.amountPaid ?? existingOrder.amountPaid ?? 0) ||
+                    (effectiveOrderType === 'cashea'
+                      ? Number((effectiveTotal * 0.4).toFixed(2))
+                      : 0);
+
+              if (paidAmount > 0) {
+                orderPayload.amountPaid = paidAmount;
+                orderPayload.paymentRecords = [
+                  {
+                    amount: paidAmount,
+                    method: normalizedMethod,
+                    reference:
+                      orderPayload.paymentReference || existingOrder.paymentReference || '',
+                    status: 'confirmed',
+                    date: new Date().toISOString(),
+                  },
+                ];
+              }
+            }
+          } else {
+            orderPayload.paymentRecords = [];
+          }
 
           let savedOrder: any;
           if (existingOrder) {
@@ -291,10 +418,9 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               transacting: trx,
             });
           } else {
-            // Strapi v5 needs documentId and locale manually populated when bypassing Document Service
             orderPayload.documentId = crypto.randomBytes(12).toString('hex');
             orderPayload.locale = 'es';
-            
+
             savedOrder = await dbQuery('api::order.order').create({
               data: orderPayload,
               transacting: trx,
@@ -309,7 +435,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
 
           const result = await dbQuery('api::order.order').findOne({
             where: { id: savedOrder.id },
-            populate: ['dispatchWarehouse', 'customer', 'performedBy'],
+            populate: ['dispatchWarehouse', 'customer', 'performedBy', 'referenceImage'],
             transacting: trx,
           });
 
@@ -326,10 +452,17 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
     async processInventoryStockAndExpense(order: any, items: any[], trx: any) {
       const orderId = order.id;
       const orderDocId = order.documentId;
-      const isCancelled = order.orderStatus === 'cancelled' || order.orderStatus === 'returned';
+      const normalizedStatus = normalizeOrderStatus(order.orderStatus);
+      const isCancelled =
+        normalizedStatus === 'cancelled' || normalizedStatus === 'returned';
       const shouldDeduct =
-        order.orderStatus !== 'pending' &&
-        (order.orderStatus === 'payment_confirmed' || order.orderStatus === 'delivered' || order.orderType === 'credit' || order.orderType === 'apartado');
+        normalizedStatus !== 'pending' &&
+        normalizedStatus !== 'failed_verification' &&
+        (normalizedStatus === 'payment_confirmed' ||
+          normalizedStatus === 'delivered' ||
+          order.orderType === 'credit' ||
+          order.orderType === 'apartado' ||
+          (order.orderType === 'cashea' && Number(order.amountPaid) > 0));
 
       let dispatchWarehouse = normalizeIdentifier(order.dispatchWarehouse);
 
@@ -369,30 +502,41 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
       if (orderDocId) reasonMatches.push({ order: { documentId: orderDocId } });
       reasonMatches.push({ reason: { $contains: `Pedido #${orderDocId || orderId}` } });
 
-      const existingSale = await dbQuery('api::inventory-movement.inventory-movement').findOne({
+      const existingSale = await dbQuery(
+        'api::inventory-movement.inventory-movement',
+      ).findOne({
         where: {
           $or: reasonMatches,
           type: 'OUT',
+          reason: { $contains: 'Venta automática por lote' },
         },
         transacting: trx,
       });
 
-      const existingReturn = await dbQuery('api::inventory-movement.inventory-movement').findOne({
+      const existingReturn = await dbQuery(
+        'api::inventory-movement.inventory-movement',
+      ).findOne({
         where: {
           $or: reasonMatches,
           type: 'IN',
+          reason: { $contains: 'Devolución automática por lote' },
         },
         transacting: trx,
       });
 
       const movementItems = buildOrderMovementItems(items);
-      const totalQuantity = movementItems.reduce((sum, current) => sum + Number(current.quantity || 0), 0);
+      const totalQuantity = movementItems.reduce(
+        (sum, current) => sum + Number(current.quantity || 0),
+        0,
+      );
 
       if (isCancelled && existingSale && !existingReturn) {
         await dbQuery('api::inventory-movement.inventory-movement').create({
           data: {
             type: 'IN',
-            reason: `Devolución automática por lote (Cancelación/Devolución Pedido #${orderDocId || orderId})`,
+            reason: `Devolución automática por lote (Cancelación/Devolución Pedido #${
+              orderDocId || orderId
+            })`,
             order: orderId,
             items: movementItems,
             quantity: totalQuantity,
@@ -421,6 +565,85 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           },
           transacting: trx,
         });
+      } else if (shouldDeduct && existingSale && !existingReturn && Array.isArray(existingSale.items)) {
+        // Si el pedido ya descontó stock y fue editado, calculamos diferencias (deltas) por variante
+        const prevMap = new Map<string, { qty: number; item: any }>();
+        existingSale.items.forEach((it: any) => {
+          const cid = String(it.colorId || '');
+          if (!cid) return;
+          const cur = prevMap.get(cid);
+          prevMap.set(cid, { qty: (cur?.qty || 0) + Number(it.quantity || 0), item: it });
+        });
+
+        const nextMap = new Map<string, { qty: number; item: any }>();
+        movementItems.forEach((it: any) => {
+          const cid = String(it.colorId || '');
+          if (!cid) return;
+          const cur = nextMap.get(cid);
+          nextMap.set(cid, { qty: (cur?.qty || 0) + Number(it.quantity || 0), item: it });
+        });
+
+        const outDeltaItems: any[] = [];
+        const inDeltaItems: any[] = [];
+
+        const allColorKeys = new Set([...prevMap.keys(), ...nextMap.keys()]);
+        allColorKeys.forEach((cid) => {
+          const prevQty = prevMap.get(cid)?.qty || 0;
+          const nextQty = nextMap.get(cid)?.qty || 0;
+          const refItem = nextMap.get(cid)?.item || prevMap.get(cid)?.item;
+          if (nextQty > prevQty) {
+            outDeltaItems.push({ ...refItem, quantity: nextQty - prevQty });
+          } else if (prevQty > nextQty) {
+            inDeltaItems.push({ ...refItem, quantity: prevQty - nextQty });
+          }
+        });
+
+        if (outDeltaItems.length > 0) {
+          const outQty = outDeltaItems.reduce((s, i) => s + i.quantity, 0);
+          await dbQuery('api::inventory-movement.inventory-movement').create({
+            data: {
+              type: 'OUT',
+              reason: `Ajuste por edición de Pedido #${orderDocId || orderId}`,
+              order: orderId,
+              items: outDeltaItems,
+              quantity: outQty,
+              date: new Date().toISOString(),
+              performedBy: order.performedBy?.id || order.performedBy || null,
+              exchangeRate: order.exchangeRate || 1,
+              warehouse: dispatchWarehouse,
+            },
+            transacting: trx,
+          });
+        }
+
+        if (inDeltaItems.length > 0) {
+          const inQty = inDeltaItems.reduce((s, i) => s + i.quantity, 0);
+          await dbQuery('api::inventory-movement.inventory-movement').create({
+            data: {
+              type: 'IN',
+              reason: `Reintegro por edición de Pedido #${orderDocId || orderId}`,
+              order: orderId,
+              items: inDeltaItems,
+              quantity: inQty,
+              date: new Date().toISOString(),
+              performedBy: order.performedBy?.id || order.performedBy || null,
+              exchangeRate: order.exchangeRate || 1,
+              warehouse: dispatchWarehouse,
+            },
+            transacting: trx,
+          });
+        }
+
+        if (outDeltaItems.length > 0 || inDeltaItems.length > 0) {
+          await dbQuery('api::inventory-movement.inventory-movement').update({
+            where: { id: existingSale.id },
+            data: {
+              items: movementItems,
+              quantity: totalQuantity,
+            },
+            transacting: trx,
+          });
+        }
       }
 
       if (order.deliveryMethod === 'delivery' && order.option && order.option !== 'Propio') {
@@ -428,8 +651,12 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         const existingExpenses = await dbQuery('api::expense.expense').findMany({
           where: {
             $or: [
-              ...(orderDocId ? [{ reference: { $eq: `Delivery de la Orden #${orderDocId}` } }] : []),
-              ...(orderId ? [{ reference: { $eq: `Delivery de la Orden #${orderId}` } }] : []),
+              ...(orderDocId
+                ? [{ reference: { $eq: `Delivery de la Orden #${orderDocId}` } }]
+                : []),
+              ...(orderId
+                ? [{ reference: { $eq: `Delivery de la Orden #${orderId}` } }]
+                : []),
             ],
           },
           transacting: trx,

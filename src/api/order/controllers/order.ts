@@ -2,12 +2,12 @@
  * order controller
  */
 
-import { factories } from '@strapi/strapi'
-import * as yup from 'yup'
+import { factories } from '@strapi/strapi';
+import * as yup from 'yup';
 
 const orderLineItemSchema = yup.object({
   productId: yup.mixed().required(),
-  colorId: yup.mixed().optional(),
+  colorId: yup.mixed().nullable().optional(),
   quantity: yup.number().required().min(1),
   unitPrice: yup.number().required().min(0),
   unitCost: yup.number().optional().min(0),
@@ -15,65 +15,78 @@ const orderLineItemSchema = yup.object({
   title: yup.string().optional(),
   colorName: yup.string().optional(),
   selectedColor: yup.string().optional(),
-})
+  productImage: yup.string().nullable().optional(),
+  priceType: yup.string().nullable().optional(),
+});
 
-const orderItemArray = yup.array().of(orderLineItemSchema).min(1)
+const orderItemArray = yup.array().of(orderLineItemSchema).min(1);
 
 const orderRequestSchema = yup.object({
-  data: yup.object({
-    orderData: yup
-      .object({
-        id: yup.number().integer().positive().optional(),
-        documentId: yup.string().optional(),
-        slug: yup.string().optional(),
-        adress: yup.string().optional(),
-        city: yup.string().optional(),
-        deliveryMethod: yup.string().optional(),
-        email: yup.string().optional(),
-        method: yup.string().optional(),
-        option: yup.string().optional(),
-        phone: yup.string().optional(),
-        orderStatus: yup.string().required(),
-        orderPlaced: yup.date().optional(),
-        orderTotal: yup.number().when(['id', 'documentId'], {
-          is: (id: any, documentId: any) => !id && !documentId,
-          then: (schema) => schema.required(),
-          otherwise: (schema) => schema.optional(),
-        }),
-        clientName: yup.string().optional(),
-        paymentReference: yup.string().optional(),
-        orderType: yup.string().optional(),
-        amountPaid: yup.number().optional(),
-        performedBy: yup.mixed().optional(),
-        customer: yup.mixed().optional(),
-        exchangeRate: yup.number().optional(),
-        shippingCost: yup.number().optional(),
-        dispatchWarehouse: yup.mixed().optional(),
-        items: orderItemArray.optional(),
-        order: orderItemArray.optional(),
-        orderItems: orderItemArray.optional(),
-        payments: yup.array().of(
-          yup.object({
-            amount: yup.number().required().min(0),
-            method: yup.string().required(),
-            reference: yup.string().optional(),
-            status: yup.string().optional(),
-          })
-        ).optional(),
-      })
-      .required()
-      .test(
-        'has-items',
-        'Se requiere al menos un item de orden en items, order o orderItems al crear un pedido',
-        (value) => {
-          if (!value) return false;
-          const hasItems = Array.isArray(value.items) || Array.isArray(value.order) || Array.isArray(value.orderItems);
-          const isExistingOrder = value.id !== undefined || value.documentId !== undefined;
-          return isExistingOrder || hasItems;
-        }
-      ),
-  }).required(),
-})
+  data: yup
+    .object({
+      orderData: yup
+        .object({
+          id: yup.number().integer().positive().optional(),
+          documentId: yup.string().optional(),
+          slug: yup.string().optional(),
+          adress: yup.string().nullable().optional(),
+          city: yup.string().nullable().optional(),
+          state: yup.string().nullable().optional(),
+          deliveryMethod: yup.string().nullable().optional(),
+          email: yup.string().nullable().optional(),
+          method: yup.string().nullable().optional(),
+          option: yup.string().nullable().optional(),
+          phone: yup.string().nullable().optional(),
+          orderStatus: yup.string().required(),
+          orderPlaced: yup.date().optional(),
+          orderTotal: yup.number().when(['id', 'documentId'], {
+            is: (id: any, documentId: any) => !id && !documentId,
+            then: (schema) => schema.required(),
+            otherwise: (schema) => schema.optional(),
+          }),
+          clientName: yup.string().nullable().optional(),
+          paymentReference: yup.string().nullable().optional(),
+          orderType: yup.string().optional(),
+          amountPaid: yup.number().optional(),
+          performedBy: yup.mixed().nullable().optional(),
+          customer: yup.mixed().nullable().optional(),
+          exchangeRate: yup.number().nullable().optional(),
+          shippingCost: yup.number().nullable().optional(),
+          dispatchWarehouse: yup.mixed().nullable().optional(),
+          items: orderItemArray.optional(),
+          order: orderItemArray.optional(),
+          orderItems: orderItemArray.optional(),
+          payments: yup
+            .array()
+            .of(
+              yup.object({
+                amount: yup.number().required().min(0),
+                method: yup.string().required(),
+                reference: yup.string().optional(),
+                currency: yup.string().optional(),
+                status: yup.string().optional(),
+                date: yup.string().optional(),
+              }),
+            )
+            .optional(),
+        })
+        .required()
+        .test(
+          'has-items',
+          'Se requiere al menos un item de orden en items, order o orderItems al crear un pedido',
+          (value) => {
+            if (!value) return false;
+            const hasItems =
+              Array.isArray(value.items) ||
+              Array.isArray(value.order) ||
+              Array.isArray(value.orderItems);
+            const isExistingOrder = value.id !== undefined || value.documentId !== undefined;
+            return isExistingOrder || hasItems;
+          },
+        ),
+    })
+    .required(),
+});
 
 export default factories.createCoreController('api::order.order', ({ strapi }) => ({
   async findAdmin(ctx) {
@@ -85,12 +98,13 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
           performedBy: true,
           dispatchWarehouse: true,
           customer: true,
+          referenceImage: true,
         },
-      })
+      });
 
-      return ctx.send({ data: orders })
+      return ctx.send({ data: orders });
     } catch (err) {
-      ctx.body = err
+      ctx.body = err;
     }
   },
 
@@ -99,17 +113,19 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
       const payload = await orderRequestSchema.validate(ctx.request.body, {
         abortEarly: false,
         stripUnknown: true,
-      })
+      });
 
-      const result = await strapi.service('api::order.order').processOrderTransaction(payload.data.orderData)
-      return ctx.send({ data: result })
+      const result = await strapi
+        .service('api::order.order')
+        .processOrderTransaction(payload.data.orderData);
+      return ctx.send({ data: result });
     } catch (err: any) {
       if (err.name === 'ValidationError') {
-        ctx.throw(400, err.errors.join(', '))
+        ctx.throw(400, err.errors.join(', '));
       }
 
-      console.error('[OrderProcess] Error en processOrderFull:', err)
-      ctx.throw(500, err.message || 'Error al procesar el pedido')
+      console.error('[OrderProcess] Error en processOrderFull:', err);
+      ctx.throw(500, err.message || 'Error al procesar el pedido');
     }
   },
 
@@ -126,7 +142,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
 
       const orderList = await strapi.documents('api::order.order').findMany({
         filters,
-        populate: ['customer', 'performedBy', 'dispatchWarehouse']
+        populate: ['customer', 'performedBy', 'dispatchWarehouse', 'referenceImage'],
       });
       const order = orderList && orderList.length > 0 ? orderList[0] : null;
 
@@ -140,7 +156,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
         method,
         reference: reference || '',
         status: status || 'confirmed',
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
       });
 
       const newAmountPaid = (Number(order.amountPaid) || 0) + Number(amount);
@@ -151,14 +167,18 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
         amountPaid: newAmountPaid,
       };
 
-      if (isFullyPaid && order.orderStatus !== 'payment_confirmed' && order.orderStatus !== 'delivered') {
+      if (
+        isFullyPaid &&
+        order.orderStatus !== 'payment_confirmed' &&
+        order.orderStatus !== 'delivered'
+      ) {
         updateData.orderStatus = 'payment_confirmed';
       }
 
       const updatedOrder = await strapi.documents('api::order.order').update({
         documentId: order.documentId,
         data: updateData,
-        populate: ['customer', 'performedBy', 'dispatchWarehouse']
+        populate: ['customer', 'performedBy', 'dispatchWarehouse', 'referenceImage'],
       });
 
       return ctx.send({ data: updatedOrder });
@@ -167,4 +187,97 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
       ctx.throw(500, err.message || 'Error al registrar el abono');
     }
   },
-}))
+
+  /**
+   * Webhook / Callback endpoint for Cashea confirmation.
+   * Ready to receive confirmations from Cashea or internal checkout verification once API keys are configured.
+   */
+  async casheaWebhook(ctx) {
+    try {
+      const configuredSecret = process.env.CASHEA_PRIVATE_API_KEY || process.env.CASHEA_WEBHOOK_SECRET;
+      const authHeader = ctx.request.headers['authorization'] || ctx.request.headers['x-cashea-signature'];
+
+      if (configuredSecret && authHeader) {
+        const cleanHeader = String(authHeader).replace(/^ApiKey\s+/i, '').replace(/^Bearer\s+/i, '').trim();
+        if (cleanHeader !== configuredSecret) {
+          return ctx.unauthorized('Invalid Cashea API Key or signature');
+        }
+      }
+
+      const body = ctx.request.body?.data || ctx.request.body || {};
+      const orderIdentifier = body.orderId || body.slug || body.documentId || body.externalOrderId;
+      const casheaReference = body.casheaOrderId || body.reference || body.idNumber || '';
+      const initialPaid = Number(body.initialAmount ?? body.downPayment ?? body.amountPaid ?? 0);
+      const status = body.status || 'APPROVED';
+
+      if (!orderIdentifier) {
+        return ctx.badRequest('orderId / documentId es requerido');
+      }
+
+      const orderList = await strapi.documents('api::order.order').findMany({
+        filters: {
+          $or: [
+            { documentId: String(orderIdentifier) },
+            { slug: String(orderIdentifier) },
+            ...(!isNaN(Number(orderIdentifier)) ? [{ id: Number(orderIdentifier) }] : []),
+          ],
+        } as any,
+      });
+
+      const existing = orderList?.[0];
+      if (!existing) {
+        return ctx.notFound('Orden no encontrada para confirmación de Cashea');
+      }
+
+      const isApproved = ['APPROVED', 'CONFIRMED', 'COMPLETED', 'PAID', 'payment_confirmed'].includes(
+        String(status).toUpperCase(),
+      );
+
+      if (!isApproved) {
+        const failed = await strapi.service('api::order.order').processOrderTransaction({
+          documentId: existing.documentId,
+          orderStatus: 'failed_verification',
+          paymentReference: String(casheaReference || existing.paymentReference || ''),
+        });
+        return ctx.send({ data: failed });
+      }
+
+      const effectiveInitial =
+        initialPaid > 0
+          ? initialPaid
+          : Number(existing.amountPaid) > 0
+          ? Number(existing.amountPaid)
+          : Number(((Number(existing.orderTotal) || 0) * 0.4).toFixed(2));
+
+      const existingPayments = Array.isArray(existing.paymentRecords) ? existing.paymentRecords : [];
+      const updatedPayments =
+        existingPayments.length > 0
+          ? existingPayments
+          : [
+              {
+                amount: effectiveInitial,
+                method: 'Cashea (Inicial)',
+                reference: String(casheaReference || existing.paymentReference || 'CASHEA'),
+                status: 'confirmed',
+                date: new Date().toISOString(),
+              },
+            ];
+
+      const updated = await strapi.service('api::order.order').processOrderTransaction({
+        documentId: existing.documentId,
+        orderType: 'cashea',
+        method: 'Cashea',
+        orderStatus: 'payment_confirmed',
+        amountPaid: effectiveInitial,
+        paymentReference: String(casheaReference || existing.paymentReference || ''),
+        orderItems: Array.isArray(existing.orderItems) ? existing.orderItems : [],
+        payments: updatedPayments,
+      });
+
+      return ctx.send({ data: updated });
+    } catch (err: any) {
+      console.error('[CasheaWebhook] Error:', err);
+      ctx.throw(500, err.message || 'Error procesando confirmación de Cashea');
+    }
+  },
+}));

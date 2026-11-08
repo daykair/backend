@@ -27,5 +27,14 @@ export default {
         policies: ['global::is-admin'],
       },
     },
+    {
+      method: 'POST',
+      path: '/orders-admin/cashea-webhook',
+      handler: 'api::order.order.casheaWebhook',
+      config: {
+        auth: false,
+        policies: ['global::is-admin'],
+      },
+    },
   ],
 };
