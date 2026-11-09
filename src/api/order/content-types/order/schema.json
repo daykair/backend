@@ -101,6 +101,13 @@
     "shippingCost": {
       "type": "decimal"
     },
+    "discount": {
+      "type": "decimal",
+      "default": 0
+    },
+    "notes": {
+      "type": "text"
+    },
     "dispatchWarehouse": {
       "type": "relation",
       "relation": "manyToOne",

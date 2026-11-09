@@ -23,6 +23,8 @@ const ORDER_FIELDS = [
   'customer',
   'exchangeRate',
   'shippingCost',
+  'discount',
+  'notes',
   'dispatchWarehouse',
 ];
 
@@ -235,7 +237,9 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                     email: fakeEmail,
                     password: crypto.randomBytes(12).toString('hex'),
                     phone: orderPayload.phone,
+                    fullname: orderPayload.clientName || null,
                     name: orderPayload.clientName || null,
+                    address: orderPayload.adress || null,
                     adress: orderPayload.adress || null,
                     city: orderPayload.city || null,
                     confirmed: true,
@@ -405,7 +409,11 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                     date: new Date().toISOString(),
                   },
                 ];
+              } else {
+                orderPayload.paymentRecords = existingRecords;
               }
+            } else {
+              orderPayload.paymentRecords = existingRecords;
             }
           } else {
             orderPayload.paymentRecords = [];

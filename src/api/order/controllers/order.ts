@@ -53,6 +53,8 @@ const orderRequestSchema = yup.object({
           customer: yup.mixed().nullable().optional(),
           exchangeRate: yup.number().nullable().optional(),
           shippingCost: yup.number().nullable().optional(),
+          discount: yup.number().nullable().optional().min(0),
+          notes: yup.string().nullable().optional(),
           dispatchWarehouse: yup.mixed().nullable().optional(),
           items: orderItemArray.optional(),
           order: orderItemArray.optional(),
