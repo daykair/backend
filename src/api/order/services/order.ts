@@ -16,6 +16,7 @@ const ORDER_FIELDS = [
   'orderTotal',
   'clientName',
   'paymentReference',
+  'trackingNumber',
   'orderType',
   'amountPaid',
   'performedBy',

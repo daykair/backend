@@ -46,6 +46,7 @@ const orderRequestSchema = yup.object({
           }),
           clientName: yup.string().nullable().optional(),
           paymentReference: yup.string().nullable().optional(),
+          trackingNumber: yup.string().nullable().optional(),
           orderType: yup.string().optional(),
           amountPaid: yup.number().optional(),
           performedBy: yup.mixed().nullable().optional(),
@@ -278,6 +279,78 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
     } catch (err: any) {
       console.error('[CasheaWebhook] Error:', err);
       ctx.throw(500, err.message || 'Error procesando confirmación de Cashea');
+    }
+  },
+
+  /**
+   * Liquidación en lote para múltiples órdenes (Cashea Express / Apartados / Crédito)
+   */
+  async batchSettle(ctx) {
+    try {
+      const body = ctx.request.body?.data || ctx.request.body || {};
+      const orderIds: (string | number)[] = Array.isArray(body.orderIds) ? body.orderIds : [];
+      const method = body.method || 'Cashea';
+      const reference = body.reference || 'Liquidación en lote';
+
+      if (orderIds.length === 0) {
+        return ctx.badRequest('Debes seleccionar al menos una orden para liquidar');
+      }
+
+      const settledOrders: any[] = [];
+
+      for (const rawId of orderIds) {
+        const filters = !isNaN(Number(rawId))
+          ? { id: Number(rawId) }
+          : { documentId: String(rawId) };
+
+        const orderList = await strapi.documents('api::order.order').findMany({
+          filters,
+        });
+        const order = orderList?.[0];
+        if (!order) continue;
+
+        const orderTotal = Number(order.orderTotal) || 0;
+        const amountPaid = Number(order.amountPaid) || 0;
+        const remaining = Number((orderTotal - amountPaid).toFixed(2));
+        if (remaining <= 0.01) continue;
+
+        const paymentRecords = Array.isArray(order.paymentRecords)
+          ? [...order.paymentRecords]
+          : [];
+        paymentRecords.push({
+          amount: remaining,
+          method,
+          reference,
+          status: 'confirmed',
+          date: new Date().toISOString(),
+        });
+
+        const updateData: any = {
+          paymentRecords,
+          amountPaid: orderTotal,
+        };
+
+        if (
+          order.orderStatus !== 'payment_confirmed' &&
+          order.orderStatus !== 'delivered'
+        ) {
+          updateData.orderStatus = 'payment_confirmed';
+        }
+
+        const updated = await strapi.documents('api::order.order').update({
+          documentId: order.documentId,
+          data: updateData,
+        });
+        settledOrders.push(updated);
+      }
+
+      return ctx.send({
+        data: settledOrders,
+        settledCount: settledOrders.length,
+      });
+    } catch (err: any) {
+      console.error('[BatchSettle] Error:', err);
+      ctx.throw(500, err.message || 'Error al liquidar órdenes en lote');
     }
   },
 }));

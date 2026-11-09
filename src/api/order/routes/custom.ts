@@ -36,5 +36,14 @@ export default {
         policies: ['global::is-admin'],
       },
     },
+    {
+      method: 'POST',
+      path: '/orders-admin/batch-settle',
+      handler: 'api::order.order.batchSettle',
+      config: {
+        auth: false,
+        policies: ['global::is-admin'],
+      },
+    },
   ],
 };
