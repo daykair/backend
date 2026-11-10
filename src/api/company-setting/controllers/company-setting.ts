@@ -1,5 +1,71 @@
 import { factories } from '@strapi/strapi';
 
+const EMPTY_PAYMENT_SETTINGS = {
+  pagoMovil: {
+    enabled: false,
+    bank: '',
+    phone: '',
+    idNumber: '',
+    holder: '',
+  },
+  binance: {
+    enabled: false,
+    email: '',
+    binanceId: '',
+    qrImageUrl: '',
+  },
+  zelle: {
+    enabled: false,
+    email: '',
+    holder: '',
+  },
+  cashea: {
+    enabled: false,
+    defaultLevelPct: 60,
+    allowZeroInitial: true,
+    customPromoEnabled: true,
+    badgeText: '3 cuotas sin interés',
+  },
+};
+
+const EMPTY_BANNER_SETTINGS = {
+  slides: [],
+  catalogPromo: {
+    enabled: false,
+    badge: '',
+    title: '',
+    subtitle: '',
+    perk1: '',
+    perk2: '',
+    perk3: '',
+    whatsappText: '',
+  },
+};
+
+const EMPTY_LOGISTICS_SETTINGS = {
+  enablePickupWeb: false,
+  enableDeliveryWeb: true,
+  enableNationalShippingWeb: true,
+  deliveryZonesText: '',
+  deliveryNoteText: '',
+  defaultDeliveryCost: 0,
+  nationalAgencies: [],
+  localCouriers: [],
+};
+
+const EMPTY_OPERATIONAL_SETTINGS = {
+  lowStockThreshold: 5,
+  abandonedOrderHours: 24,
+  layawayWarningDays: 20,
+  layawayExpiredDays: 30,
+  whatsappTemplateGeneral:
+    'Hola {cliente}, te escribimos respecto a tu pedido #{pedido} ({estado}).',
+  whatsappTemplateShipping:
+    'Hola {cliente}, tu pedido #{pedido} ({estado}) fue enviado por {agencia} con el número de guía: {guia}.',
+  whatsappTemplatePaymentReminder:
+    'Hola {cliente}, te recordamos que tu pedido #{pedido} presenta un saldo pendiente de ${saldo}.',
+};
+
 export default factories.createCoreController(
   'api::company-setting.company-setting' as any,
   ({ strapi }) => ({
@@ -13,7 +79,7 @@ export default factories.createCoreController(
         if (!setting) {
           setting = await dbQuery.create({
             data: {
-              commercialName: 'Saodi',
+              commercialName: '',
               businessName: '',
               rif: '',
               logoIncludesTaxInfo: false,
@@ -21,7 +87,11 @@ export default factories.createCoreController(
               email: '',
               address: '',
               instagram: '',
-              receiptFooterNote: 'Gracias por su compra.',
+              receiptFooterNote: '',
+              paymentSettings: EMPTY_PAYMENT_SETTINGS,
+              bannerSettings: EMPTY_BANNER_SETTINGS,
+              logisticsSettings: EMPTY_LOGISTICS_SETTINGS,
+              operationalSettings: EMPTY_OPERATIONAL_SETTINGS,
               publishedAt: new Date().toISOString(),
             },
             populate: ['logo', 'favicon'],
@@ -45,15 +115,28 @@ export default factories.createCoreController(
         });
 
         const cleanData: any = {
-          commercialName: payload.commercialName ?? existing?.commercialName ?? 'Saodi',
+          commercialName: payload.commercialName ?? existing?.commercialName ?? '',
           businessName: payload.businessName ?? existing?.businessName ?? '',
           rif: payload.rif ?? existing?.rif ?? '',
-          logoIncludesTaxInfo: Boolean(payload.logoIncludesTaxInfo),
+          logoIncludesTaxInfo:
+            payload.logoIncludesTaxInfo !== undefined
+              ? Boolean(payload.logoIncludesTaxInfo)
+              : Boolean(existing?.logoIncludesTaxInfo),
           phone: payload.phone ?? existing?.phone ?? '',
           email: payload.email ?? existing?.email ?? '',
           address: payload.address ?? existing?.address ?? '',
           instagram: payload.instagram ?? existing?.instagram ?? '',
           receiptFooterNote: payload.receiptFooterNote ?? existing?.receiptFooterNote ?? '',
+          paymentSettings:
+            payload.paymentSettings ?? existing?.paymentSettings ?? EMPTY_PAYMENT_SETTINGS,
+          bannerSettings:
+            payload.bannerSettings ?? existing?.bannerSettings ?? EMPTY_BANNER_SETTINGS,
+          logisticsSettings:
+            payload.logisticsSettings ?? existing?.logisticsSettings ?? EMPTY_LOGISTICS_SETTINGS,
+          operationalSettings:
+            payload.operationalSettings ??
+            existing?.operationalSettings ??
+            EMPTY_OPERATIONAL_SETTINGS,
           publishedAt: new Date().toISOString(),
         };
 

@@ -13,8 +13,7 @@
   "pluginOptions": {},
   "attributes": {
     "commercialName": {
-      "type": "string",
-      "default": "Saodi"
+      "type": "string"
     },
     "businessName": {
       "type": "string"
@@ -52,6 +51,18 @@
     },
     "receiptFooterNote": {
       "type": "text"
+    },
+    "paymentSettings": {
+      "type": "json"
+    },
+    "bannerSettings": {
+      "type": "json"
+    },
+    "logisticsSettings": {
+      "type": "json"
+    },
+    "operationalSettings": {
+      "type": "json"
     }
   }
 }
