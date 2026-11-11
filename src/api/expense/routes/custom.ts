@@ -9,7 +9,7 @@ export default {
                 policies: [
                     {
                         name: 'global::is-admin',
-                        config: { roles: ['admin'] }
+                        config: { permission: 'api::expense.expense.find' }
                     }
                 ]
             }
@@ -23,7 +23,7 @@ export default {
                 policies: [
                     {
                         name: 'global::is-admin',
-                        config: { roles: ['admin'] }
+                        config: { permission: 'api::expense.expense.create' }
                     }
                 ]
             }
@@ -37,7 +37,7 @@ export default {
                 policies: [
                     {
                         name: 'global::is-admin',
-                        config: { roles: ['admin'] }
+                        config: { permission: 'api::expense.expense.update' }
                     }
                 ]
             }
@@ -51,7 +51,7 @@ export default {
                 policies: [
                     {
                         name: 'global::is-admin',
-                        config: { roles: ['admin'] }
+                        config: { permission: 'api::expense.expense.delete' }
                     }
                 ]
             }

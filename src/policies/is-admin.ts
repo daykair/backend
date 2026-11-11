@@ -49,20 +49,49 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
             throw new PolicyError('Usuario no encontrado');
         }
 
+        if (user.blocked) {
+            console.error('[is-admin policy] Usuario bloqueado intentó acceder:', decoded.id);
+            throw new PolicyError('Acceso denegado: Tu cuenta está bloqueada.');
+        }
+
         // Configuración de roles: Lista negra de roles que no son administrativos
         const forbiddenRoles = ['public', 'client', 'cliente', 'customer', 'authenticated'];
-        const userRole = (user.role?.type || user.role?.name || '').toLowerCase();
+        const roleType = (user.role?.type || '').toLowerCase();
+        const roleName = (user.role?.name || '').toLowerCase();
+        const userRole = roleType || roleName;
+        const isSuperAdmin = roleType === 'admin' || roleType.includes('admin') || roleName.includes('admin');
+
+        if (isSuperAdmin) {
+            policyContext.state.user = user;
+            return true;
+        }
+
+        if (forbiddenRoles.includes(roleType) || forbiddenRoles.includes(roleName)) {
+            console.error(`[is-admin policy] Acceso denegado: El rol '${userRole}' pertenece a la lista de clientes/público.`);
+            throw new PolicyError('Acceso denegado: Solo personal autorizado.');
+        }
 
         let isAllowed = false;
 
-        if (config?.roles && Array.isArray(config.roles)) {
+        if (config?.permission) {
+            // Validar si el rol personalizado tiene asignado el permiso granular en Strapi
+            const requiredPerms = Array.isArray(config.permission) ? config.permission : [config.permission];
+            const roleId = user.role?.id;
+            if (roleId && requiredPerms.length > 0) {
+                const matchedPerm = await strapi.db.query('plugin::users-permissions.permission').findOne({
+                    where: {
+                        role: roleId,
+                        action: { $in: requiredPerms }
+                    }
+                });
+                isAllowed = Boolean(matchedPerm);
+            }
+        } else if (config?.roles && Array.isArray(config.roles)) {
             // Si la ruta especifica explícitamente los roles permitidos, respetarlo
-            isAllowed = config.roles.includes(userRole);
+            isAllowed = config.roles.includes(roleType) || config.roles.includes(roleName);
         } else {
-            // Por defecto, permitimos cualquier rol que NO esté en la lista negra.
-            // Esto asegura que roles personalizados (ej. "Vendedor", "Cajero") creados
-            // desde tu panel pasen esta política, y luego Strapi filtre sus acciones CRUD.
-            isAllowed = !forbiddenRoles.includes(userRole);
+            // Por defecto, permitimos cualquier rol administrativo que NO esté en la lista negra.
+            isAllowed = true;
         }
 
         if (isAllowed) {
@@ -70,8 +99,8 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
             return true;
         }
 
-        console.error(`[is-admin policy] Acceso denegado: El rol '${userRole}' no tiene privilegios administrativos.`);
-        throw new PolicyError('Acceso denegado: Solo personal autorizado.');
+        console.error(`[is-admin policy] Acceso denegado: El rol '${userRole}' no tiene privilegios para esta operación.`);
+        throw new PolicyError('Acceso denegado: No tienes permisos para realizar esta acción.');
     } catch (err: any) {
         console.error('[is-admin policy] Excepción capturada:', err.message || err);
         throw new PolicyError('Token inválido o expirado');

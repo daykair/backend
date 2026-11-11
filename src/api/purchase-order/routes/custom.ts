@@ -6,7 +6,12 @@ export default {
       handler: 'api::purchase-order.purchase-order.findAdmin',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: 'api::purchase-order.purchase-order.find' },
+          },
+        ],
       },
     },
     {
@@ -15,7 +20,12 @@ export default {
       handler: 'api::purchase-order.purchase-order.processPurchaseOrderFull',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: ['api::purchase-order.purchase-order.create', 'api::purchase-order.purchase-order.update'] },
+          },
+        ],
       },
     },
   ],

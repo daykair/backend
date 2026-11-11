@@ -7,7 +7,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.find' } }
         ]
       }
     },
@@ -18,7 +18,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.create' } }
         ]
       }
     },
@@ -29,7 +29,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.update' } }
         ]
       }
     },
@@ -40,7 +40,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.destroy' } }
         ]
       }
     }

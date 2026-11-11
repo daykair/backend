@@ -7,7 +7,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: ['plugin::users-permissions.role.find', 'plugin::users-permissions.user.find'] } }
         ]
       }
     },
@@ -18,7 +18,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: ['plugin::users-permissions.role.find', 'plugin::users-permissions.role.create', 'plugin::users-permissions.role.update'] } }
         ]
       }
     },
@@ -29,7 +29,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: ['plugin::users-permissions.role.find', 'plugin::users-permissions.role.findOne'] } }
         ]
       }
     },
@@ -40,7 +40,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { roles: ['admin'] } }
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.role.update' } }
         ]
       }
     },
@@ -50,7 +50,9 @@ export default {
       handler: 'admin-role.createRole',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.role.create' } }
+        ]
       }
     },
     {
@@ -59,7 +61,9 @@ export default {
       handler: 'admin-role.deleteRole',
       config: {
         auth: false,
-        policies: ['global::is-admin']
+        policies: [
+          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.role.delete' } }
+        ]
       }
     }
   ]

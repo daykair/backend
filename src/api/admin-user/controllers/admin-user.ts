@@ -5,7 +5,11 @@ export default {
         populate: ['role'],
         sort: { createdAt: 'desc' },
         filters: {
-          role: { type: { $ne: 'client' } }
+          role: {
+            type: {
+              $notIn: ['client', 'public', 'authenticated']
+            }
+          }
         }
       });
 
@@ -91,14 +95,43 @@ export default {
   async updateUser(ctx: any) {
     const { id } = ctx.params;
     const { username, email, password, role, blocked } = ctx.request.body;
+    const requesterId = ctx.state?.user?.id;
 
     try {
-      const user = await strapi.entityService.findOne('plugin::users-permissions.user', id, {
+      const user: any = await strapi.entityService.findOne('plugin::users-permissions.user', id, {
         populate: ['role']
       });
 
       if (!user) {
         return ctx.notFound('Usuario no encontrado.');
+      }
+
+      const isSelf = requesterId && Number(id) === Number(requesterId);
+      if (isSelf) {
+        if (blocked === true) {
+          return ctx.badRequest('No puedes bloquear tu propia cuenta activa.');
+        }
+        if (role && Number(role) !== Number(user.role?.id)) {
+          return ctx.badRequest('No puedes cambiar ni degradar tu propio rol.');
+        }
+      }
+
+      // Prevent blocking or demoting the last active admin
+      const isCurrentlyAdmin = (user.role?.type || '').toLowerCase() === 'admin';
+      const isBeingBlocked = blocked === true && !user.blocked;
+      const isBeingDemoted = role && Number(role) !== Number(user.role?.id);
+
+      if (isCurrentlyAdmin && (isBeingBlocked || isBeingDemoted)) {
+        const activeAdminsCount = await strapi.db.query('plugin::users-permissions.user').count({
+          where: {
+            role: { type: 'admin' },
+            blocked: { $ne: true }
+          }
+        });
+
+        if (activeAdminsCount <= 1) {
+          return ctx.badRequest('No se puede bloquear ni cambiar el rol del único administrador maestro activo.');
+        }
       }
 
       const updateData: any = {};
@@ -129,6 +162,15 @@ export default {
 
       // Use the plugin service edit function to handle password hashing
       const updatedUser = await strapi.plugin('users-permissions').service('user').edit(id, updateData);
+
+      // If the user was blocked, immediately revoke all their refresh tokens
+      if (blocked === true) {
+        try {
+          await strapi.service('api::refresh-token.refresh-token').revokeAllForUser(id);
+        } catch (revokeErr) {
+          strapi.log.error('Error revoking tokens for blocked user:', revokeErr);
+        }
+      }
       
       const { password: _p, ...safeUser } = updatedUser;
       
@@ -140,8 +182,13 @@ export default {
 
   async deleteUser(ctx: any) {
     const { id } = ctx.params;
+    const requesterId = ctx.state?.user?.id;
 
     try {
+      if (requesterId && Number(id) === Number(requesterId)) {
+        return ctx.badRequest('No puedes eliminar tu propia cuenta mientras estás en sesión.');
+      }
+
       const user: any = await strapi.entityService.findOne('plugin::users-permissions.user', id, {
         populate: ['role']
       });
@@ -159,6 +206,12 @@ export default {
         if (adminUsersCount <= 1) {
           return ctx.badRequest('No se puede eliminar el único usuario administrador maestro del sistema.');
         }
+      }
+
+      try {
+        await strapi.service('api::refresh-token.refresh-token').revokeAllForUser(id);
+      } catch (revokeErr) {
+        strapi.log.error('Error revoking tokens before deleting user:', revokeErr);
       }
 
       await strapi.entityService.delete('plugin::users-permissions.user', id);

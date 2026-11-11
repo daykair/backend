@@ -6,7 +6,12 @@ export default {
       handler: 'api::order.order.findAdmin',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: ['api::order.order.find', 'api::cash-register.cash-register.find'] },
+          },
+        ],
       },
     },
     {
@@ -15,7 +20,12 @@ export default {
       handler: 'api::order.order.processOrderFull',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: 'api::order.order.create' },
+          },
+        ],
       },
     },
     {
@@ -24,7 +34,12 @@ export default {
       handler: 'api::order.order.addPayment',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: ['api::order.order.update', 'api::order.order.create'] },
+          },
+        ],
       },
     },
     {
@@ -42,7 +57,12 @@ export default {
       handler: 'api::order.order.batchSettle',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: 'api::order.order.update' },
+          },
+        ],
       },
     },
   ],

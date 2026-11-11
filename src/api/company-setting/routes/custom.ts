@@ -14,7 +14,12 @@ export default {
       handler: 'api::company-setting.company-setting.updateAdminSettings',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: 'api::company-setting.company-setting.update' },
+          },
+        ],
       },
     },
   ],

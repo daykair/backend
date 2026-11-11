@@ -23,6 +23,14 @@ export default {
       config: {
         auth: false,
       }
+    },
+    {
+      method: 'POST',
+      path: '/auth/change-password',
+      handler: 'api::auth.auth.changeOwnPassword',
+      config: {
+        auth: false,
+      }
     }
   ]
 };

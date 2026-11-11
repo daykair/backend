@@ -20,19 +20,37 @@ export default {
 
     try {
       const bcrypt = require('bcryptjs');
-      // Find user by email or username
-      let user = await strapi.db.query('plugin::users-permissions.user').findOne({ where: { email: identifier } });
-      if (!user) user = await strapi.db.query('plugin::users-permissions.user').findOne({ where: { username: identifier } });
+      // Find user by email or username with role populated
+      let user = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { email: identifier.toLowerCase().trim() },
+        populate: ['role'],
+      });
+      if (!user) {
+        user = await strapi.db.query('plugin::users-permissions.user').findOne({
+          where: { username: identifier.trim() },
+          populate: ['role'],
+        });
+      }
       
       if (!user) {
         // Prevent timing attacks by performing a dummy hash comparison
         // The dummy hash matches the format of bcrypt
         await bcrypt.compare(password, '$2a$10$wTf2iR0H.P2b3wR5Vb.JbO1kO.2TfP7P7.E1V1r3V.7X.Y.a1T.f2');
-        return ctx.unauthorized('Invalid credentials');
+        return ctx.unauthorized('Credenciales inválidas');
       }
 
       const valid = await bcrypt.compare(password, user.password);
-      if (!valid) return ctx.unauthorized('Invalid credentials');
+      if (!valid) return ctx.unauthorized('Credenciales inválidas');
+
+      if (user.blocked) {
+        return ctx.forbidden('Tu cuenta ha sido suspendida o bloqueada. Contacta al administrador.');
+      }
+
+      const forbiddenRoles = ['public', 'client', 'cliente', 'customer', 'authenticated'];
+      const userRole = (user.role?.type || user.role?.name || '').toLowerCase();
+      if (forbiddenRoles.includes(userRole)) {
+        return ctx.forbidden('Esta cuenta no tiene privilegios para acceder al panel administrativo.');
+      }
 
       // Issue short-lived access JWT
       const accessJwt = await strapi.plugin('users-permissions').service('jwt').issue({ id: user.id });
@@ -180,6 +198,57 @@ export default {
     } catch (err: any) {
       strapi.log.error('Auth logout error', err);
       return ctx.badRequest(err.message || 'Logout failed');
+    }
+  },
+
+  async changeOwnPassword(ctx: any) {
+    const { currentPassword, newPassword } = ctx.request.body || {};
+    if (!currentPassword || !newPassword) {
+      return ctx.badRequest('Debes ingresar tu contraseña actual y la nueva contraseña.');
+    }
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return ctx.badRequest('La nueva contraseña debe tener al menos 6 caracteres.');
+    }
+
+    try {
+      let token = '';
+      if (ctx.request.header?.authorization) {
+        token = ctx.request.header.authorization.replace('Bearer ', '').trim();
+      } else if (ctx.cookies?.get('strapi_jwt')) {
+        token = ctx.cookies.get('strapi_jwt') || '';
+      }
+
+      if (!token) {
+        return ctx.unauthorized('No autenticado.');
+      }
+
+      const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
+      if (!decoded?.id) {
+        return ctx.unauthorized('Sesión inválida.');
+      }
+
+      const user = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { id: decoded.id },
+      });
+
+      if (!user || user.blocked) {
+        return ctx.forbidden('Usuario no válido o bloqueado.');
+      }
+
+      const bcrypt = require('bcryptjs');
+      const valid = await bcrypt.compare(currentPassword, user.password);
+      if (!valid) {
+        return ctx.badRequest('La contraseña actual es incorrecta.');
+      }
+
+      await strapi.plugin('users-permissions').service('user').edit(user.id, {
+        password: newPassword,
+      });
+
+      return ctx.send({ message: 'Contraseña actualizada exitosamente.' });
+    } catch (err: any) {
+      strapi.log.error('changeOwnPassword error', err);
+      return ctx.badRequest(err.message || 'No se pudo cambiar la contraseña.');
     }
   },
 };
