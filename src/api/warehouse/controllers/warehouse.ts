@@ -10,8 +10,9 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
     async transfer(ctx) {
       try {
         const bodyData = ctx.request.body?.data || ctx.request.body;
-        const { sourceWarehouseId, targetWarehouseId, items } = bodyData || {};
+        const { sourceWarehouseId, targetWarehouseId, items, notes } = bodyData || {};
         const performedBy = ctx.state.user?.id || null;
+        const cleanNotes = typeof notes === 'string' ? notes.trim().slice(0, 240) : '';
 
         if (
           !sourceWarehouseId ||
@@ -28,7 +29,8 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
         }
 
         for (const item of items) {
-          if (!item?.colorId || !(Number(item?.quantity) > 0)) {
+          const parsedQty = Number(item?.quantity);
+          if (!item?.colorId || !Number.isFinite(parsedQty) || parsedQty <= 0) {
             return ctx.badRequest('Todos los ítems de transferencia deben incluir variante y cantidad mayor a 0.');
           }
         }
@@ -74,7 +76,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
           for (const item of items) {
             const color = await dbQuery('api::color.color').findOne({
               where: buildIdWhere(item.colorId),
-              select: ['id', 'documentId', 'name'],
+              select: ['id', 'documentId', 'name', 'code'],
               populate: ['product'],
               transacting: trx,
             });
@@ -87,22 +89,34 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
               throw err;
             }
 
-            const qty = Number(item.quantity);
+            const qty = Number(Number(item.quantity).toFixed(3));
             const title = item.title || item.productName || color.product?.title || 'Producto';
             const colorName = item.selectedColor || item.colorName || color.name || 'N/A';
+
+            if (!color.product?.isWeighed && !Number.isInteger(qty)) {
+              const err: any = new Error(
+                `La cantidad para '${title} (${colorName})' debe ser un número entero.`,
+              );
+              err.status = 400;
+              throw err;
+            }
 
             const prev = requestedByColor.get(color.id);
             requestedByColor.set(color.id, {
               color,
-              qty: (prev?.qty || 0) + qty,
+              qty: Number(((prev?.qty || 0) + qty).toFixed(3)),
               label: `${title} (${colorName})`,
             });
 
             formattedItems.push({
-              productId: item.productId || color.product?.id || null,
+              productId: item.productId || color.product?.documentId || color.product?.id || null,
               colorId: color.documentId || color.id,
               title,
               colorName,
+              productCode: color.product?.productCode || null,
+              colorCode: color.code || null,
+              unitCost: Number(color.product?.costPrice || 0),
+              isWeighed: Boolean(color.product?.isWeighed),
               quantity: qty,
             });
           }
@@ -127,19 +141,27 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
           }
 
           const transferCode = `TRF-${Math.floor(Date.now() / 1000)}`;
-          const totalQuantity = formattedItems.reduce(
-            (acc: number, item: any) => acc + Number(item.quantity || 0),
-            0,
+          const nowIso = new Date().toISOString();
+          const totalQuantity = Number(
+            formattedItems
+              .reduce((acc: number, item: any) => acc + Number(item.quantity || 0), 0)
+              .toFixed(3),
           );
+          const outReason = cleanNotes
+            ? `Transferencia enviada a ${targetWh.name} (${transferCode}) — ${cleanNotes}`
+            : `Transferencia enviada a ${targetWh.name} (${transferCode})`;
+          const inReason = cleanNotes
+            ? `Transferencia recibida desde ${sourceWh.name} (${transferCode}) — ${cleanNotes}`
+            : `Transferencia recibida desde ${sourceWh.name} (${transferCode})`;
 
           // Crear Movimiento de Salida (OUT) en Origen
           const outMovement = await dbQuery('api::inventory-movement.inventory-movement').create({
             data: {
               type: 'OUT',
-              reason: `Transferencia enviada a ${targetWh.name} (${transferCode})`,
+              reason: outReason,
               items: formattedItems,
               quantity: totalQuantity,
-              date: new Date().toISOString(),
+              date: nowIso,
               warehouse: sourceWh.id,
               performedBy,
             },
@@ -150,17 +172,27 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
           const inMovement = await dbQuery('api::inventory-movement.inventory-movement').create({
             data: {
               type: 'IN',
-              reason: `Transferencia recibida desde ${sourceWh.name} (${transferCode})`,
+              reason: inReason,
               items: formattedItems,
               quantity: totalQuantity,
-              date: new Date().toISOString(),
+              date: nowIso,
               warehouse: targetWh.id,
               performedBy,
             },
             transacting: trx,
           });
 
-          return { transferCode, outMovementId: outMovement.id, inMovementId: inMovement.id };
+          return {
+            transferCode,
+            outMovementId: outMovement.id,
+            inMovementId: inMovement.id,
+            sourceWarehouseName: sourceWh.name,
+            targetWarehouseName: targetWh.name,
+            totalQuantity,
+            notes: cleanNotes || null,
+            date: nowIso,
+            items: formattedItems,
+          };
         });
 
         return ctx.send({ message: 'Transferencia completada', data: result });

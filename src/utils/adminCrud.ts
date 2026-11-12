@@ -20,32 +20,166 @@ export async function resolveEntityDocumentId(
   return entity?.documentId || null;
 }
 
-export function mergePopulate(queryPopulate: any, defaultPopulate?: any): any {
-  if (!defaultPopulate) return queryPopulate;
-  if (!queryPopulate) return defaultPopulate;
-  if (queryPopulate === '*') return '*';
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-  if (Array.isArray(defaultPopulate)) {
-    if (Array.isArray(queryPopulate)) {
-      return Array.from(new Set([...defaultPopulate, ...queryPopulate]));
+function clonePopulateValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(clonePopulateValue) as unknown as T;
+  }
+  if (isPlainObject(value)) {
+    const copy: Record<string, any> = {};
+    for (const [key, val] of Object.entries(value)) {
+      copy[key] = clonePopulateValue(val);
     }
-    if (typeof queryPopulate === 'string') {
-      return Array.from(new Set([...defaultPopulate, queryPopulate]));
-    }
-    if (typeof queryPopulate === 'object') {
-      const merged: Record<string, any> = { ...queryPopulate };
-      for (const rel of defaultPopulate) {
-        if (merged[rel] === undefined) merged[rel] = true;
+    return copy as T;
+  }
+  return value;
+}
+
+function normalizeRelationDescriptor(descriptor: Record<string, any>): Record<string, any> {
+  const copy = clonePopulateValue(descriptor);
+  if (copy.populate !== undefined && copy.populate !== '*' && typeof copy.populate !== 'boolean') {
+    copy.populate = normalizePopulateObject(copy.populate);
+  }
+  return copy;
+}
+
+function applyPopulatePath(
+  target: Record<string, any>,
+  rawPath: string,
+  leafValue: any = true
+): void {
+  const segments = rawPath
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length === 0) return;
+
+  let cursor = target;
+  for (let i = 0; i < segments.length; i += 1) {
+    const key = segments[i];
+    if (key === '*') continue;
+
+    if (i === segments.length - 1) {
+      if (isPlainObject(leafValue)) {
+        const normalizedLeaf = normalizeRelationDescriptor(leafValue);
+        cursor[key] = isPlainObject(cursor[key])
+          ? mergePopulateObjects(cursor[key], normalizedLeaf)
+          : normalizedLeaf;
+      } else if (cursor[key] === undefined || leafValue !== true) {
+        cursor[key] = clonePopulateValue(leafValue);
       }
-      return merged;
+      return;
+    }
+
+    const existing = cursor[key];
+    if (isPlainObject(existing)) {
+      cursor[key] = normalizeRelationDescriptor(existing);
+      if (!isPlainObject(cursor[key].populate)) {
+        cursor[key].populate = {};
+      }
+    } else {
+      cursor[key] = { populate: {} };
+    }
+    cursor = cursor[key].populate;
+  }
+}
+
+function normalizePopulateObject(populate: any): Record<string, any> {
+  const normalized: Record<string, any> = {};
+  if (!populate || populate === '*') return normalized;
+
+  if (typeof populate === 'string') {
+    for (const part of populate.split(',')) {
+      applyPopulatePath(normalized, part, true);
+    }
+    return normalized;
+  }
+
+  if (Array.isArray(populate)) {
+    for (const item of populate) {
+      if (typeof item === 'string') {
+        for (const part of item.split(',')) {
+          applyPopulatePath(normalized, part, true);
+        }
+      } else if (isPlainObject(item)) {
+        Object.assign(normalized, mergePopulateObjects(normalized, normalizePopulateObject(item)));
+      }
+    }
+    return normalized;
+  }
+
+  if (isPlainObject(populate)) {
+    for (const [key, value] of Object.entries(populate)) {
+      if (value === undefined) continue;
+      if (key.includes('.')) {
+        applyPopulatePath(normalized, key, value);
+      } else if (isPlainObject(value)) {
+        const descriptor = normalizeRelationDescriptor(value);
+        normalized[key] = isPlainObject(normalized[key])
+          ? mergePopulateObjects(normalized[key], descriptor)
+          : descriptor;
+      } else {
+        normalized[key] = clonePopulateValue(value);
+      }
     }
   }
 
-  if (typeof defaultPopulate === 'object' && typeof queryPopulate === 'object' && !Array.isArray(queryPopulate)) {
-    return { ...defaultPopulate, ...queryPopulate };
+  return normalized;
+}
+
+function mergePopulateObjects(
+  base: Record<string, any>,
+  override: Record<string, any>
+): Record<string, any> {
+  const merged = clonePopulateValue(base);
+
+  for (const [key, overrideVal] of Object.entries(override)) {
+    if (overrideVal === undefined) continue;
+    const baseVal = merged[key];
+
+    if (key === 'populate') {
+      if (overrideVal === '*' || typeof overrideVal === 'boolean') {
+        merged[key] = overrideVal;
+      } else if (isPlainObject(baseVal)) {
+        merged[key] = mergePopulateObjects(baseVal, normalizePopulateObject(overrideVal));
+      } else {
+        merged[key] = normalizePopulateObject(overrideVal);
+      }
+      continue;
+    }
+
+    if (key === 'filters' || key === 'sort' || key === 'fields') {
+      merged[key] = clonePopulateValue(overrideVal);
+      continue;
+    }
+
+    if (isPlainObject(baseVal) && isPlainObject(overrideVal)) {
+      merged[key] = mergePopulateObjects(baseVal, overrideVal);
+    } else if (isPlainObject(baseVal) && overrideVal === true) {
+      merged[key] = clonePopulateValue(baseVal);
+    } else {
+      merged[key] = clonePopulateValue(overrideVal);
+    }
   }
 
-  return queryPopulate;
+  return merged;
+}
+
+export function mergePopulate(queryPopulate: any, defaultPopulate?: any): any {
+  if (queryPopulate === '*') return '*';
+  if (!defaultPopulate) return queryPopulate;
+  if (!queryPopulate) {
+    return defaultPopulate === '*' ? '*' : normalizePopulateObject(defaultPopulate);
+  }
+  if (defaultPopulate === '*') return queryPopulate;
+
+  return mergePopulateObjects(
+    normalizePopulateObject(defaultPopulate),
+    normalizePopulateObject(queryPopulate)
+  );
 }
 
 export function extractPayloadData(body: any): Record<string, any> {

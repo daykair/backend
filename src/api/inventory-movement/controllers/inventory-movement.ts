@@ -5,7 +5,12 @@ export default factories.createCoreController(
   'api::inventory-movement.inventory-movement',
   ({ strapi }) =>
     createAdminCrudHandlers(strapi, 'api::inventory-movement.inventory-movement', {
-      defaultPopulate: ['color.product', 'warehouse', 'performedBy', 'order'],
+      defaultPopulate: {
+        color: { populate: { product: true } },
+        warehouse: true,
+        performedBy: true,
+        order: true,
+      },
       injectPerformedBy: true,
       beforeCreate: async (strapiRef, data) => {
         if (data.warehouse) {
