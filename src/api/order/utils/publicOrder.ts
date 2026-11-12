@@ -44,7 +44,9 @@ export function calculateEffectiveDiscountPct(product: any, color?: any): number
       : Math.min(100, Math.max(0, Number(product?.discount || 0)));
   const colorDiscount = Math.min(100, Math.max(0, Number(color?.discount || 0)));
   const catDiscounts = Array.isArray(product?.categories)
-    ? product.categories.map((cat: any) => Math.min(100, Math.max(0, Number(cat?.Discount || 0))))
+    ? product.categories.map((cat: any) =>
+        Math.min(100, Math.max(0, Number(cat?.discount ?? cat?.Discount ?? 0))),
+      )
     : [];
 
   return Math.max(prodDiscount, colorDiscount, ...catDiscounts, 0);
@@ -208,5 +210,77 @@ export async function sendOrderStatusNotification(
   } catch (err: any) {
     console.warn('[OrderEmail] No se pudo enviar correo transaccional:', err?.message || err);
   }
+}
+
+export async function resolveCustomerFromContext(strapi: any, ctx: any) {
+  const authHeader = String(ctx.request.header?.authorization || '');
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const cookieToken = ctx.cookies?.get('store_customer_jwt') || '';
+  const token = bearer || cookieToken;
+  if (!token) return null;
+
+  try {
+    const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
+    if (!decoded?.id) return null;
+    const user = await strapi.db.query('plugin::users-permissions.user').findOne({
+      where: { id: decoded.id },
+      select: ['id', 'blocked'],
+      populate: ['role'],
+    });
+    if (!user || user.blocked) return null;
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+export async function validatePublicOrderPayableAccess(
+  strapi: any,
+  identifier: string,
+  ctx: any,
+) {
+  const clean = String(identifier || '').trim();
+  if (!clean) {
+    const err: any = new Error('Identificador de pedido requerido');
+    err.status = 400;
+    throw err;
+  }
+
+  const order = await strapi.db.query('api::order.order').findOne({
+    where: {
+      $or: [{ slug: clean }, { documentId: clean }],
+    },
+    populate: {
+      customer: {
+        select: ['id', 'email'],
+      },
+    },
+  });
+
+  if (!order) {
+    const err: any = new Error('Pedido no encontrado');
+    err.status = 404;
+    throw err;
+  }
+
+  if (!isPayablePublicStatus(order.orderStatus)) {
+    const err: any = new Error('Este pedido ya no admite envío o modificación de comprobante de pago.');
+    err.status = 400;
+    throw err;
+  }
+
+  const attachedEmail = String(order.customer?.email || '').trim().toLowerCase();
+  const hasRegisteredCustomer = Boolean(order.customer?.id) && !attachedEmail.endsWith('@cliente.local');
+
+  if (hasRegisteredCustomer) {
+    const loggedCustomer = await resolveCustomerFromContext(strapi, ctx);
+    if (!loggedCustomer || Number(loggedCustomer.id) !== Number(order.customer.id)) {
+      const err: any = new Error('Debes iniciar sesión con la cuenta propietaria de este pedido.');
+      err.status = 403;
+      throw err;
+    }
+  }
+
+  return order;
 }
 

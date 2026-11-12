@@ -179,7 +179,9 @@ function scheduleOperationalAlertsCheck(strapi: any) {
             `${s.lowStockCount} variante(s) bajo stock.`,
         );
 
-        const todayKey = new Date().toISOString().split('T')[0];
+        const todayKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Caracas',
+        }).format(new Date());
         const hasSmtp = Boolean(process.env.SMTP_USERNAME && process.env.SMTP_PASSWORD);
         if (hasSmtp && alerts.companyEmail && lastDigestDay !== todayKey) {
           try {

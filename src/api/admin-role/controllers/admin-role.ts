@@ -1,5 +1,57 @@
+import { isSuperAdminRole } from '../../../utils/adminCrud';
+
+const PROTECTED_SYSTEM_ROLES = new Set(['admin', 'super_admin', 'public', 'authenticated', 'client', 'cliente', 'customer']);
+
+function sanitizeRolePermissionsInput(permissions: Record<string, any>): Record<string, any> {
+  const sanitized: Record<string, any> = {};
+
+  for (const [resourceKey, resourceVal] of Object.entries(permissions || {})) {
+    if (!resourceKey.startsWith('api::') && !resourceKey.startsWith('plugin::')) {
+      continue;
+    }
+
+    if (resourceVal && typeof resourceVal === 'object' && 'controllers' in resourceVal) {
+      const controllerObj = (resourceVal as any).controllers;
+      sanitized[resourceKey] = { controllers: {} };
+
+      for (const [controllerName, controllerVal] of Object.entries(controllerObj || {})) {
+        if (controllerVal && typeof controllerVal === 'object') {
+          sanitized[resourceKey].controllers[controllerName] = {};
+
+          for (const [actionName, actionVal] of Object.entries(controllerVal)) {
+            if (actionVal && typeof actionVal === 'object' && 'enabled' in actionVal) {
+              sanitized[resourceKey].controllers[controllerName][actionName] = {
+                enabled: Boolean((actionVal as any).enabled),
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return sanitized;
+}
+
+function isReservedAdminOrSystemRoleName(name?: string, type?: string): boolean {
+  const normalizedName = String(name || '').trim().toLowerCase();
+  const normalizedType = String(type || '').trim().toLowerCase();
+  if (
+    normalizedName.includes('admin') ||
+    normalizedType.includes('admin') ||
+    PROTECTED_SYSTEM_ROLES.has(normalizedName) ||
+    PROTECTED_SYSTEM_ROLES.has(normalizedType)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export default {
   async getRoles(ctx: any) {
+    if (!isSuperAdminRole(ctx.state?.user?.role)) {
+      return ctx.forbidden('Solo un Super Administrador puede consultar roles administrativos.');
+    }
     try {
       const rawRoles = await strapi.entityService.findMany('plugin::users-permissions.role');
 
@@ -26,6 +78,9 @@ export default {
   },
 
   async getPermissionsTree(ctx: any) {
+    if (!isSuperAdminRole(ctx.state?.user?.role)) {
+      return ctx.forbidden('Solo un Super Administrador puede consultar el árbol de permisos.');
+    }
     try {
       const upService = strapi.plugin('users-permissions').service('users-permissions');
       const permissions = await upService.getActions();
@@ -36,6 +91,9 @@ export default {
   },
 
   async getRole(ctx: any) {
+    if (!isSuperAdminRole(ctx.state?.user?.role)) {
+      return ctx.forbidden('Solo un Super Administrador puede consultar detalles de roles.');
+    }
     const { id } = ctx.params;
     try {
       const role = await strapi.plugin('users-permissions').service('role').findOne(id);
@@ -49,6 +107,10 @@ export default {
   },
 
   async updateRole(ctx: any) {
+    if (!isSuperAdminRole(ctx.state?.user?.role)) {
+      return ctx.forbidden('Solo un Super Administrador puede modificar roles y permisos.');
+    }
+
     const { id } = ctx.params;
     const { name, description, permissions } = ctx.request.body;
 
@@ -64,34 +126,23 @@ export default {
       return ctx.badRequest('La estructura de permisos enviada no es válida.');
     }
 
-    const sanitizedPermissions: Record<string, any> = {};
-
-    for (const [resourceKey, resourceVal] of Object.entries(permissions)) {
-      if (!resourceKey.startsWith('api::') && !resourceKey.startsWith('plugin::')) {
-        continue;
-      }
-
-      if (resourceVal && typeof resourceVal === 'object' && 'controllers' in resourceVal) {
-        const controllerObj = (resourceVal as any).controllers;
-        sanitizedPermissions[resourceKey] = { controllers: {} };
-
-        for (const [controllerName, controllerVal] of Object.entries(controllerObj)) {
-          if (controllerVal && typeof controllerVal === 'object') {
-            sanitizedPermissions[resourceKey].controllers[controllerName] = {};
-
-            for (const [actionName, actionVal] of Object.entries(controllerVal)) {
-              if (actionVal && typeof actionVal === 'object' && 'enabled' in actionVal) {
-                sanitizedPermissions[resourceKey].controllers[controllerName][actionName] = {
-                  enabled: Boolean((actionVal as any).enabled)
-                };
-              }
-            }
-          }
-        }
-      }
-    }
-
     try {
+      const existingRole = await strapi.plugin('users-permissions').service('role').findOne(id);
+      if (!existingRole) {
+        return ctx.notFound('Rol no encontrado.');
+      }
+
+      if (isSuperAdminRole(existingRole)) {
+        return ctx.forbidden('El rol maestro Admin no puede ser modificado.');
+      }
+
+      const existingType = String(existingRole.type || '').toLowerCase();
+      if (isReservedAdminOrSystemRoleName(name) && !(PROTECTED_SYSTEM_ROLES.has(existingType) && name.trim().toLowerCase() === existingType)) {
+        return ctx.badRequest('Ese nombre de rol está reservado por el sistema o contiene la palabra reservada "admin".');
+      }
+
+      const sanitizedPermissions = sanitizeRolePermissionsInput(permissions);
+
       await strapi.plugin('users-permissions').service('role').updateRole(id, {
         name: name.trim(),
         description: description ? description.trim() : '',
@@ -105,10 +156,18 @@ export default {
   },
 
   async createRole(ctx: any) {
+    if (!isSuperAdminRole(ctx.state?.user?.role)) {
+      return ctx.forbidden('Solo un Super Administrador puede crear roles.');
+    }
+
     const { name, description, permissions } = ctx.request.body;
 
     if (!name || typeof name !== 'string' || name.trim().length < 3) {
       return ctx.badRequest('El nombre del rol es requerido y debe tener al menos 3 caracteres.');
+    }
+
+    if (isReservedAdminOrSystemRoleName(name)) {
+      return ctx.badRequest('No puedes crear un rol con nombre reservado o que contenga "admin".');
     }
 
     if (description && typeof description !== 'string') {
@@ -119,32 +178,7 @@ export default {
       return ctx.badRequest('La estructura de permisos enviada no es válida.');
     }
 
-    const sanitizedPermissions: Record<string, any> = {};
-
-    for (const [resourceKey, resourceVal] of Object.entries(permissions)) {
-      if (!resourceKey.startsWith('api::') && !resourceKey.startsWith('plugin::')) {
-        continue;
-      }
-
-      if (resourceVal && typeof resourceVal === 'object' && 'controllers' in resourceVal) {
-        const controllerObj = (resourceVal as any).controllers;
-        sanitizedPermissions[resourceKey] = { controllers: {} };
-
-        for (const [controllerName, controllerVal] of Object.entries(controllerObj)) {
-          if (controllerVal && typeof controllerVal === 'object') {
-            sanitizedPermissions[resourceKey].controllers[controllerName] = {};
-
-            for (const [actionName, actionVal] of Object.entries(controllerVal)) {
-              if (actionVal && typeof actionVal === 'object' && 'enabled' in actionVal) {
-                sanitizedPermissions[resourceKey].controllers[controllerName][actionName] = {
-                  enabled: Boolean((actionVal as any).enabled)
-                };
-              }
-            }
-          }
-        }
-      }
-    }
+    const sanitizedPermissions = sanitizeRolePermissionsInput(permissions);
 
     try {
       const newRole = await strapi.plugin('users-permissions').service('role').createRole({
@@ -161,6 +195,9 @@ export default {
   },
 
   async deleteRole(ctx: any) {
+    if (!isSuperAdminRole(ctx.state?.user?.role)) {
+      return ctx.forbidden('Solo un Super Administrador puede eliminar roles.');
+    }
     const { id } = ctx.params;
     
     try {
@@ -172,7 +209,7 @@ export default {
       
       // Prevent deleting system roles
       const systemRoles = ['admin', 'public', 'authenticated', 'client'];
-      if (systemRoles.includes(role.type?.toLowerCase())) {
+      if (isSuperAdminRole(role) || systemRoles.includes(role.type?.toLowerCase())) {
         return ctx.badRequest('No se pueden eliminar los roles del sistema.');
       }
 

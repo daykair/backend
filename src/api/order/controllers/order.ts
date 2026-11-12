@@ -4,30 +4,24 @@
 
 import { factories } from '@strapi/strapi';
 import crypto from 'crypto';
+import fs from 'fs';
 import * as yup from 'yup';
 import { buildAdminFindParams } from '../../../utils/adminQuery';
-import { userHasExactPermission } from '../../../utils/adminCrud';
-import { sendOrderStatusNotification } from '../utils/publicOrder';
+import {
+  mergePopulate,
+  SAFE_USER_DB_POPULATE,
+  SAFE_USER_POPULATE,
+  sanitizeEntityUserRelations,
+  userHasExactPermission,
+} from '../../../utils/adminCrud';
+import {
+  resolveCustomerFromContext,
+  sendOrderStatusNotification,
+  validatePublicOrderPayableAccess,
+} from '../utils/publicOrder';
 
 async function resolveCustomerUser(strapi: any, ctx: any) {
-  const authHeader = String(ctx.request.header?.authorization || '');
-  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  const cookieToken = ctx.cookies?.get('store_customer_jwt') || '';
-  const token = bearer || cookieToken;
-  if (!token) return null;
-
-  try {
-    const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
-    if (!decoded?.id) return null;
-    const user = await strapi.db.query('plugin::users-permissions.user').findOne({
-      where: { id: decoded.id },
-      select: ['id', 'blocked'],
-    });
-    if (!user || user.blocked) return null;
-    return user;
-  } catch {
-    return null;
-  }
+  return resolveCustomerFromContext(strapi, ctx);
 }
 
 const orderLineItemSchema = yup.object({
@@ -120,20 +114,26 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
   async findAdmin(ctx) {
     try {
       const params = buildAdminFindParams(ctx.query);
+      const defaultOrderPopulate = {
+        performedBy: SAFE_USER_POPULATE,
+        dispatchWarehouse: true,
+        customer: SAFE_USER_POPULATE,
+        referenceImage: true,
+      };
+      const populate = mergePopulate(
+        ctx.query?.populate,
+        defaultOrderPopulate,
+        ['performedBy', 'dispatchWarehouse', 'customer', 'referenceImage'],
+      );
       const orders = await strapi.documents('api::order.order').findMany({
         ...params,
-        populate: {
-          ...((ctx.query.populate as any) || {}),
-          performedBy: true,
-          dispatchWarehouse: true,
-          customer: true,
-          referenceImage: true,
-        },
+        populate,
       });
 
-      return ctx.send({ data: orders });
-    } catch (err) {
-      ctx.body = err;
+      return ctx.send({ data: sanitizeEntityUserRelations(orders) });
+    } catch (err: any) {
+      console.error('[Order findAdmin] Error:', err);
+      return ctx.internalServerError(err?.message || 'Error al obtener pedidos');
     }
   },
 
@@ -161,68 +161,117 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
   async addPayment(ctx) {
     try {
       const { id } = ctx.params;
-      const { amount, method, reference, status } = ctx.request.body.data || ctx.request.body;
+      const bodyPayload = ctx.request.body?.data || ctx.request.body || {};
+      const { amount, method, reference, status } = bodyPayload;
 
-      if (!amount || !method) {
-        return ctx.throw(400, 'Monto y método son requeridos para un abono');
+      const parsedAmount = Number(amount);
+      const cleanMethod = String(method || '').trim();
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || !cleanMethod) {
+        return ctx.badRequest('Monto positivo y método son requeridos para un abono');
       }
 
-      const filters = !isNaN(Number(id)) ? { id: Number(id) } : { documentId: String(id) };
+      const idWhere = /^\d+$/.test(String(id)) ? { id: Number(id) } : { documentId: String(id) };
+      const orderPopulate = {
+        customer: SAFE_USER_POPULATE,
+        performedBy: SAFE_USER_POPULATE,
+        dispatchWarehouse: true,
+        referenceImage: true,
+      } as any;
+      const txPopulate = {
+        customer: SAFE_USER_DB_POPULATE,
+        performedBy: SAFE_USER_DB_POPULATE,
+        dispatchWarehouse: true,
+        referenceImage: true,
+      } as any;
 
-      const orderList = await strapi.documents('api::order.order').findMany({
-        filters,
-        populate: ['customer', 'performedBy', 'dispatchWarehouse', 'referenceImage'],
+      const outcome = await strapi.db.transaction(async (trx) => {
+        const order = await (strapi.db as any).query('api::order.order').findOne({
+          where: idWhere,
+          populate: txPopulate,
+          transacting: trx,
+        });
+
+        if (!order) {
+          const notFoundErr: any = new Error('Orden no encontrada');
+          notFoundErr.status = 404;
+          throw notFoundErr;
+        }
+
+        const currentStatus = String(order.orderStatus || '').trim().toLowerCase();
+        if (currentStatus === 'cancelled' || currentStatus === 'returned') {
+          const badErr: any = new Error('No se pueden registrar abonos en una orden cancelada o devuelta.');
+          badErr.status = 400;
+          throw badErr;
+        }
+
+        const orderTotal = Number(order.orderTotal) || 0;
+        const currentPaid = Number(order.amountPaid) || 0;
+        if (orderTotal > 0 && currentPaid >= orderTotal - 0.01) {
+          const paidErr: any = new Error('Esta orden ya se encuentra pagada en su totalidad.');
+          paidErr.status = 400;
+          throw paidErr;
+        }
+
+        const paymentRecords = Array.isArray(order.paymentRecords) ? [...order.paymentRecords] : [];
+        paymentRecords.push({
+          amount: Number(parsedAmount.toFixed(2)),
+          method: cleanMethod,
+          reference: reference || '',
+          status: status || 'confirmed',
+          date: new Date().toISOString(),
+        });
+
+        const newAmountPaid = Number((currentPaid + parsedAmount).toFixed(2));
+        const isFullyPaid = newAmountPaid + 0.01 >= orderTotal;
+
+        const updateData: any = {
+          paymentRecords,
+          amountPaid: newAmountPaid,
+        };
+
+        if (
+          isFullyPaid &&
+          order.orderStatus !== 'payment_confirmed' &&
+          order.orderStatus !== 'delivered'
+        ) {
+          updateData.orderStatus = 'payment_confirmed';
+        }
+
+        await (strapi.db as any).query('api::order.order').update({
+          where: { id: order.id },
+          data: updateData,
+          transacting: trx,
+        });
+
+        const updatedOrder = await strapi.documents('api::order.order').findOne({
+          documentId: order.documentId,
+          populate: orderPopulate,
+        });
+
+        return {
+          updatedOrder,
+          previousStatus: order.orderStatus,
+          confirmedNow: updateData.orderStatus === 'payment_confirmed',
+        };
       });
-      const order = orderList && orderList.length > 0 ? orderList[0] : null;
 
-      if (!order) {
-        return ctx.throw(404, 'Orden no encontrada');
-      }
-
-      const paymentRecords = Array.isArray(order.paymentRecords) ? [...order.paymentRecords] : [];
-      paymentRecords.push({
-        amount: Number(amount),
-        method,
-        reference: reference || '',
-        status: status || 'confirmed',
-        date: new Date().toISOString(),
-      });
-
-      const newAmountPaid = (Number(order.amountPaid) || 0) + Number(amount);
-      const isFullyPaid = newAmountPaid >= (Number(order.orderTotal) || 0);
-
-      const updateData: any = {
-        paymentRecords,
-        amountPaid: newAmountPaid,
-      };
-
-      if (
-        isFullyPaid &&
-        order.orderStatus !== 'payment_confirmed' &&
-        order.orderStatus !== 'delivered'
-      ) {
-        updateData.orderStatus = 'payment_confirmed';
-      }
-
-      const updatedOrder = await strapi.documents('api::order.order').update({
-        documentId: order.documentId,
-        data: updateData,
-        populate: ['customer', 'performedBy', 'dispatchWarehouse', 'referenceImage'],
-      });
-
-      if (updateData.orderStatus === 'payment_confirmed') {
+      if (outcome.confirmedNow && outcome.updatedOrder) {
         void sendOrderStatusNotification(
           strapi,
-          updatedOrder,
+          outcome.updatedOrder,
           'payment_confirmed',
-          order.orderStatus,
+          outcome.previousStatus,
         );
       }
 
-      return ctx.send({ data: updatedOrder });
+      return ctx.send({ data: sanitizeEntityUserRelations(outcome.updatedOrder) });
     } catch (err: any) {
+      const status = err?.status || err?.statusCode;
+      if (status && status >= 400 && status < 500) {
+        return ctx.throw(status, err.message || 'Solicitud de abono inválida');
+      }
       console.error('[OrderProcess] Error en addPayment:', err);
-      ctx.throw(500, err.message || 'Error al registrar el abono');
+      return ctx.internalServerError(err?.message || 'Error al registrar el abono');
     }
   },
 
@@ -290,13 +339,16 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
 
       const effectiveInitial =
         initialPaid > 0
-          ? initialPaid
+          ? Number(initialPaid.toFixed(2))
           : Number(existing.amountPaid) > 0
           ? Number(existing.amountPaid)
           : Number(((Number(existing.orderTotal) || 0) * 0.4).toFixed(2));
 
-      const existingPayments = Array.isArray(existing.paymentRecords) ? existing.paymentRecords : [];
-      const updatedPayments =
+      const orderTotal = Number(existing.orderTotal || 0);
+      const existingPayments: any[] = Array.isArray(existing.paymentRecords)
+        ? existing.paymentRecords
+        : [];
+      const updatedPayments: any[] =
         existingPayments.length > 0
           ? existingPayments
           : [
@@ -309,12 +361,27 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
               },
             ];
 
+      const totalRecordedPaid = Number(
+        updatedPayments
+          .filter((p: any) => !p?.status || p.status === 'confirmed')
+          .reduce((acc: number, p: any) => acc + (Number(p?.amount) || 0), 0)
+          .toFixed(2),
+      );
+      const effectivePaidTotal = Math.max(effectiveInitial, totalRecordedPaid);
+      const isFullyPaid = orderTotal > 0 ? effectivePaidTotal + 0.01 >= orderTotal : effectivePaidTotal > 0;
+      const nextStatus =
+        existing.orderStatus === 'delivered'
+          ? 'delivered'
+          : isFullyPaid
+          ? 'payment_confirmed'
+          : 'pending';
+
       const updated = await strapi.service('api::order.order').processOrderTransaction({
         documentId: existing.documentId,
         orderType: 'cashea',
         method: 'Cashea',
-        orderStatus: 'payment_confirmed',
-        amountPaid: effectiveInitial,
+        orderStatus: nextStatus,
+        amountPaid: effectivePaidTotal,
         paymentReference: String(casheaReference || existing.paymentReference || ''),
         orderItems: Array.isArray(existing.orderItems) ? existing.orderItems : [],
         payments: updatedPayments,
@@ -334,69 +401,90 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
     try {
       const body = ctx.request.body?.data || ctx.request.body || {};
       const orderIds: (string | number)[] = Array.isArray(body.orderIds) ? body.orderIds : [];
-      const method = body.method || 'Cashea';
-      const reference = body.reference || 'Liquidación en lote';
+      const method = String(body.method || 'Cashea').trim() || 'Cashea';
+      const reference = String(body.reference || 'Liquidación en lote').trim();
 
       if (orderIds.length === 0) {
         return ctx.badRequest('Debes seleccionar al menos una orden para liquidar');
       }
 
-      const settledOrders: any[] = [];
+      const settledOutcome = await strapi.db.transaction(async (trx) => {
+        const results: Array<{ updated: any; previousStatus: string; notify: boolean }> = [];
 
-      for (const rawId of orderIds) {
-        const filters = !isNaN(Number(rawId))
-          ? { id: Number(rawId) }
-          : { documentId: String(rawId) };
+        for (const rawId of orderIds) {
+          const idWhere = /^\d+$/.test(String(rawId))
+            ? { id: Number(rawId) }
+            : { documentId: String(rawId) };
 
-        const orderList = await strapi.documents('api::order.order').findMany({
-          filters,
-        });
-        const order = orderList?.[0];
-        if (!order) continue;
+          const order = await (strapi.db as any).query('api::order.order').findOne({
+            where: idWhere,
+            transacting: trx,
+          });
+          if (!order) continue;
 
-        const orderTotal = Number(order.orderTotal) || 0;
-        const amountPaid = Number(order.amountPaid) || 0;
-        const remaining = Number((orderTotal - amountPaid).toFixed(2));
-        if (remaining <= 0.01) continue;
+          const currentStatus = String(order.orderStatus || '').trim().toLowerCase();
+          if (currentStatus === 'cancelled' || currentStatus === 'returned') continue;
 
-        const paymentRecords = Array.isArray(order.paymentRecords)
-          ? [...order.paymentRecords]
-          : [];
-        paymentRecords.push({
-          amount: remaining,
-          method,
-          reference,
-          status: 'confirmed',
-          date: new Date().toISOString(),
-        });
+          const orderTotal = Number(order.orderTotal) || 0;
+          const amountPaid = Number(order.amountPaid) || 0;
+          const remaining = Number((orderTotal - amountPaid).toFixed(2));
+          if (remaining <= 0.01) continue;
 
-        const updateData: any = {
-          paymentRecords,
-          amountPaid: orderTotal,
-        };
+          const paymentRecords = Array.isArray(order.paymentRecords)
+            ? [...order.paymentRecords]
+            : [];
+          paymentRecords.push({
+            amount: remaining,
+            method,
+            reference,
+            status: 'confirmed',
+            date: new Date().toISOString(),
+          });
 
-        if (
-          order.orderStatus !== 'payment_confirmed' &&
-          order.orderStatus !== 'delivered'
-        ) {
-          updateData.orderStatus = 'payment_confirmed';
+          const updateData: any = {
+            paymentRecords,
+            amountPaid: Number(orderTotal.toFixed(2)),
+          };
+
+          const shouldConfirm =
+            order.orderStatus !== 'payment_confirmed' &&
+            order.orderStatus !== 'delivered';
+          if (shouldConfirm) {
+            updateData.orderStatus = 'payment_confirmed';
+          }
+
+          await (strapi.db as any).query('api::order.order').update({
+            where: { id: order.id },
+            data: updateData,
+            transacting: trx,
+          });
+
+          const updated = await strapi.documents('api::order.order').findOne({
+            documentId: order.documentId,
+          });
+
+          results.push({
+            updated,
+            previousStatus: order.orderStatus,
+            notify: Boolean(shouldConfirm && updated),
+          });
         }
 
-        const updated = await strapi.documents('api::order.order').update({
-          documentId: order.documentId,
-          data: updateData,
-        });
-        if (updateData.orderStatus === 'payment_confirmed') {
+        return results;
+      });
+
+      for (const entry of settledOutcome) {
+        if (entry.notify) {
           void sendOrderStatusNotification(
             strapi,
-            updated,
+            entry.updated,
             'payment_confirmed',
-            order.orderStatus,
+            entry.previousStatus,
           );
         }
-        settledOrders.push(updated);
       }
 
+      const settledOrders = settledOutcome.map((entry) => entry.updated);
       return ctx.send({
         data: settledOrders,
         settledCount: settledOrders.length,
@@ -558,11 +646,78 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
   },
 
   /**
+   * Sube de forma segura el comprobante de pago validando estado pagable, propietario, MIME y tamaño.
+   */
+  async uploadPublicPaymentProof(ctx, next) {
+    try {
+      const { slug } = ctx.params;
+      await validatePublicOrderPayableAccess(strapi, slug, ctx);
+
+      const rawFiles = ctx.request.files?.files ?? ctx.request.files?.file;
+      const candidateList = Array.isArray(rawFiles) ? rawFiles : rawFiles ? [rawFiles] : [];
+      const cleanupTempFiles = async () => {
+        for (const f of candidateList) {
+          if (f?.filepath) {
+            await fs.promises.unlink(f.filepath).catch(() => {});
+          }
+        }
+      };
+
+      if (candidateList.length !== 1) {
+        await cleanupTempFiles();
+        return ctx.badRequest('Debes adjuntar exactamente una imagen de comprobante.');
+      }
+
+      const file: any = candidateList[0];
+      const mime = String(file?.mimetype || file?.type || '').toLowerCase();
+      const size = Number(file?.size || 0);
+      const allowedMimes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+      const maxProofBytes = 5 * 1024 * 1024;
+
+      if (!allowedMimes.has(mime)) {
+        await cleanupTempFiles();
+        return ctx.badRequest('Formato inválido. Solo se permiten imágenes JPG, PNG o WebP.');
+      }
+      if (!Number.isFinite(size) || size <= 0 || size > maxProofBytes) {
+        await cleanupTempFiles();
+        return ctx.badRequest('El comprobante debe pesar entre 1 byte y 5 MB.');
+      }
+
+      ctx.request.body = {};
+      ctx.request.files = { files: file };
+
+      await (strapi.plugin('upload').controller('content-api') as any).upload(ctx, next);
+      const uploaded = Array.isArray(ctx.body) ? ctx.body[0] : ctx.body;
+      if (!uploaded?.id) {
+        return ctx.internalServerError('No se pudo procesar la subida del comprobante.');
+      }
+
+      return ctx.send({
+        data: {
+          id: uploaded.id,
+          documentId: uploaded.documentId,
+          url: uploaded.url,
+          name: uploaded.name,
+          mime: uploaded.mime,
+          size: uploaded.size,
+        },
+      });
+    } catch (err: any) {
+      if (err?.status === 400) return ctx.badRequest(err.message);
+      if (err?.status === 403) return ctx.forbidden(err.message);
+      if (err?.status === 404) return ctx.notFound(err.message);
+      console.error('[UploadPublicPaymentProof] Error:', err);
+      return ctx.internalServerError('Error subiendo el comprobante de pago.');
+    }
+  },
+
+  /**
    * Recibe referencia e imagen de pago del cliente para órdenes pendientes.
    */
   async submitPublicPayment(ctx) {
     try {
       const { slug } = ctx.params;
+      await validatePublicOrderPayableAccess(strapi, slug, ctx);
       const body = ctx.request.body?.data || ctx.request.body || {};
       const data = await strapi.service('api::order.order').submitPublicOrderPayment(slug, {
         paymentReference: body.paymentReference,
@@ -571,6 +726,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
       return ctx.send({ data });
     } catch (err: any) {
       if (err?.status === 400) return ctx.badRequest(err.message);
+      if (err?.status === 403) return ctx.forbidden(err.message);
       if (err?.status === 404) return ctx.notFound(err.message);
       console.error('[SubmitPublicPayment] Error:', err);
       ctx.throw(500, err.message || 'Error enviando el comprobante');

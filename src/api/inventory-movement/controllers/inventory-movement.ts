@@ -1,5 +1,9 @@
 import { factories } from '@strapi/strapi';
-import { createAdminCrudHandlers, resolveEntityDocumentId } from '../../../utils/adminCrud';
+import {
+  createAdminCrudHandlers,
+  resolveEntityDocumentId,
+  SAFE_USER_POPULATE,
+} from '../../../utils/adminCrud';
 
 export default factories.createCoreController(
   'api::inventory-movement.inventory-movement',
@@ -8,9 +12,10 @@ export default factories.createCoreController(
       defaultPopulate: {
         color: { populate: { product: true } },
         warehouse: true,
-        performedBy: true,
+        performedBy: SAFE_USER_POPULATE,
         order: true,
       },
+      allowedPopulateKeys: ['color', 'product', 'warehouse', 'performedBy', 'order'],
       injectPerformedBy: true,
       beforeCreate: async (strapiRef, data) => {
         if (data.warehouse) {

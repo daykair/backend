@@ -7,7 +7,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.find' } }
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
         ]
       }
     },
@@ -18,7 +18,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.create' } }
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
         ]
       }
     },
@@ -29,7 +29,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { permission: ['plugin::users-permissions.user.create', 'plugin::users-permissions.user.update'] } }
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
         ]
       }
     },
@@ -40,7 +40,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.update' } }
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
         ]
       }
     },
@@ -51,7 +51,7 @@ export default {
       config: {
         auth: false,
         policies: [
-          { name: 'global::is-admin', config: { permission: 'plugin::users-permissions.user.destroy' } }
+          { name: 'global::is-admin', config: { roles: ['admin'] } }
         ]
       }
     }

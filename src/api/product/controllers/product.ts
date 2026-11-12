@@ -4,7 +4,11 @@
 
 import { factories } from '@strapi/strapi';
 import { buildAdminFindParams } from '../../../utils/adminQuery';
-import { createAdminCrudHandlers } from '../../../utils/adminCrud';
+import {
+    createAdminCrudHandlers,
+    mergePopulate,
+    userHasExactPermission,
+} from '../../../utils/adminCrud';
 
 function slugifySpanish(value: string): string {
     return String(value || '')
@@ -97,22 +101,6 @@ async function resolveCategoryDocIds(strapi: any, rawCategories: any[]): Promise
     return resolved;
 }
 
-async function userHasExactPermission(strapi: any, user: any, action: string): Promise<boolean> {
-    if (!user) return false;
-    const roleType = String(user.role?.type || '').toLowerCase();
-    const roleName = String(user.role?.name || '').toLowerCase();
-    const isSuperAdmin = roleType === 'admin' || roleType.includes('admin') || roleName.includes('admin');
-    if (isSuperAdmin) return true;
-
-    const roleId = user.role?.id;
-    if (!roleId) return false;
-
-    const matched = await strapi.db.query('plugin::users-permissions.permission').findOne({
-        where: { role: roleId, action }
-    });
-    return Boolean(matched);
-}
-
 async function removeMediaFilesSafely(strapi: any, mediaInput: any, skipMediaIds?: Set<number>) {
     if (!mediaInput) return;
     const files = Array.isArray(mediaInput) ? mediaInput : [mediaInput];
@@ -134,7 +122,8 @@ async function deleteVariantWithStockCleanup(
     colorDocId: string,
     reason: string,
     performedById?: string | number | null,
-    skipMediaIds?: Set<number>
+    skipMediaIds?: Set<number>,
+    deferredMediaQueue?: any[]
 ) {
     const colorWithRelations = await strapi.documents('api::color.color').findOne({
         documentId: colorDocId,
@@ -189,8 +178,19 @@ async function deleteVariantWithStockCleanup(
         }
     }
 
-    await removeMediaFilesSafely(strapi, colorWithRelations.images, skipMediaIds);
-    await removeMediaFilesSafely(strapi, colorWithRelations.colorImage, skipMediaIds);
+    if (Array.isArray(deferredMediaQueue)) {
+        if (Array.isArray(colorWithRelations.images)) {
+            deferredMediaQueue.push(...colorWithRelations.images);
+        } else if (colorWithRelations.images) {
+            deferredMediaQueue.push(colorWithRelations.images);
+        }
+        if (colorWithRelations.colorImage) {
+            deferredMediaQueue.push(colorWithRelations.colorImage);
+        }
+    } else {
+        await removeMediaFilesSafely(strapi, colorWithRelations.images, skipMediaIds);
+        await removeMediaFilesSafely(strapi, colorWithRelations.colorImage, skipMediaIds);
+    }
 
     await strapi.documents('api::color.color').delete({ documentId: colorDocId });
 }
@@ -198,7 +198,10 @@ async function deleteVariantWithStockCleanup(
 export default factories.createCoreController('api::product.product', ({ strapi }) => {
     const crud = createAdminCrudHandlers(strapi, 'api::product.product', {
         defaultPopulate: ['categories', 'productImage'],
+        allowedPopulateKeys: ['categories', 'productImage', 'colors'],
     });
+
+    const ALLOWED_PRODUCT_POPULATE = ['categories', 'productImage', 'colors'];
 
     return {
     updateAdmin: crud.updateAdmin,
@@ -206,7 +209,15 @@ export default factories.createCoreController('api::product.product', ({ strapi 
     async findAdmin(ctx) {
         try {
             const params = buildAdminFindParams(ctx.query);
-            const products = await strapi.documents('api::product.product').findMany(params);
+            const populate = mergePopulate(
+                ctx.query?.populate,
+                { categories: true, productImage: true },
+                ALLOWED_PRODUCT_POPULATE,
+            );
+            const products = await strapi.documents('api::product.product').findMany({
+                ...params,
+                ...(populate !== undefined ? { populate } : {}),
+            });
 
             return ctx.send({ data: products });
         } catch (err: any) {
@@ -222,26 +233,29 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 return ctx.notFound('Producto no encontrado');
             }
 
-            const queryPopulate = (ctx.query?.populate as any) || {};
-            const product = await strapi.documents('api::product.product').findOne({
-                ...ctx.query,
-                documentId: targetDocId,
-                populate: {
-                    categories: true,
-                    productImage: true,
-                    colors: {
-                        populate: {
-                            images: true,
-                            colorImage: true,
-                            warehouse_stocks: {
-                                populate: {
-                                    warehouse: true
-                                }
+            const defaultOnePopulate = {
+                categories: true,
+                productImage: true,
+                colors: {
+                    populate: {
+                        images: true,
+                        colorImage: true,
+                        warehouse_stocks: {
+                            populate: {
+                                warehouse: true
                             }
                         }
-                    },
-                    ...queryPopulate
+                    }
                 }
+            };
+            const populate = mergePopulate(
+                ctx.query?.populate,
+                defaultOnePopulate,
+                ALLOWED_PRODUCT_POPULATE,
+            );
+            const product = await strapi.documents('api::product.product').findOne({
+                documentId: targetDocId,
+                populate,
             });
 
             if (!product) {
@@ -348,46 +362,10 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             hasVariants: rawProduct.hasVariants !== undefined ? Boolean(rawProduct.hasVariants) : true,
         };
 
-        let savedProduct: any = null;
-        const createdVariantDocIds: string[] = [];
         const performedById = ctx.state?.user?.documentId || ctx.state?.user?.id || null;
 
         try {
-            // 1. Crear o actualizar producto (solo campos permitidos)
-            if (isNewProduct) {
-                const createPayload = {
-                    ...baseProductPayload,
-                    ...(cleanCategories !== undefined ? { categories: cleanCategories } : {}),
-                    ...(cleanProductImages !== undefined ? { productImage: cleanProductImages } : {})
-                };
-                savedProduct = await strapi.documents('api::product.product').create({
-                    data: createPayload
-                });
-                productId = savedProduct.documentId;
-            } else {
-                const updatePayload = {
-                    ...baseProductPayload,
-                    ...(cleanCategories !== undefined ? { categories: { set: cleanCategories } } : {}),
-                    ...(cleanProductImages !== undefined ? { productImage: { set: cleanProductImages } } : {})
-                };
-                savedProduct = await strapi.documents('api::product.product').update({
-                    documentId: productId!,
-                    data: updatePayload
-                });
-            }
-
-            // 2. Sincronizar variantes
-            const currentVariants = (await strapi.documents('api::color.color').findMany({
-                filters: { product: { documentId: productId } } as any,
-                populate: ['images', 'colorImage']
-            })) as any[];
-
             const validIncomingVariants = Array.isArray(variantsData) ? variantsData : [];
-            const incomingIds = new Set(
-                validIncomingVariants.filter((v: any) => v?.id).map((v: any) => String(v.id))
-            );
-
-            // Recolectar imágenes aún referenciadas por variantes que permanecen
             const retainedMediaIds = new Set<number>();
             for (const v of validIncomingVariants) {
                 if (Array.isArray(v?.images)) {
@@ -402,143 +380,169 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 }
             }
 
-            // Eliminar variantes removidas
-            const variantsToDelete = currentVariants.filter(
-                (cv: any) =>
-                    !incomingIds.has(String(cv.documentId)) && !incomingIds.has(String(cv.id))
-            );
-            for (const cv of variantsToDelete) {
-                await deleteVariantWithStockCleanup(
-                    strapi,
-                    cv.documentId,
-                    `Variante eliminada al actualizar "${title}"`,
-                    performedById,
-                    retainedMediaIds
-                );
-            }
+            const deferredMediaQueue: any[] = [];
 
-            // Crear o actualizar variantes activas
-            for (const variant of validIncomingVariants) {
-                if (!variant) continue;
+            const savedProduct = await strapi.db.transaction(async () => {
+                let currentSavedProduct: any = null;
 
-                const variantName = String(variant.name || '').trim() || 'Estándar';
-                const variantCode = String(variant.code || '000000').replace(/#/g, '').slice(0, 6) || '000000';
-                const vIsDiscounted = Boolean(variant.isDiscounted);
-                const vDiscount = vIsDiscounted
-                    ? Number(Math.min(100, Math.max(0, Number(variant.discount) || 0)).toFixed(2))
-                    : 0;
-
-                const cleanImages = Array.isArray(variant.images)
-                    ? variant.images
-                          .map((img: any) => (typeof img === 'object' ? Number(img?.id) : Number(img)))
-                          .filter((id: number) => Number.isFinite(id) && id > 0)
-                    : undefined;
-
-                let cleanColorImage: number | null | undefined = undefined;
-                if (variant.colorImage === null) {
-                    cleanColorImage = null;
-                } else if (variant.colorImage !== undefined) {
-                    const num = typeof variant.colorImage === 'object'
-                        ? Number(variant.colorImage?.id)
-                        : Number(variant.colorImage);
-                    if (Number.isFinite(num) && num > 0) {
-                        cleanColorImage = num;
-                    }
-                }
-
-                if (variant.id) {
-                    // Verificar que la variante pertenezca a este producto (anti-IDOR)
-                    const matchedExisting = currentVariants.find(
-                        (cv: any) =>
-                            String(cv.documentId) === String(variant.id) ||
-                            String(cv.id) === String(variant.id)
-                    );
-                    if (!matchedExisting) {
-                        throw new Error(`La variante "${variantName}" no pertenece a este producto.`);
-                    }
-
-                    // No sobrescribir `stock` en variantes existentes para no perder movimientos concurrentes
-                    const updateData: any = {
-                        name: variantName,
-                        code: variantCode,
-                        isDiscounted: vIsDiscounted,
-                        discount: vDiscount,
-                        ...(cleanImages !== undefined ? { images: { set: cleanImages } } : {}),
-                        ...(cleanColorImage !== undefined ? { colorImage: cleanColorImage } : {})
+                // 1. Crear o actualizar producto (solo campos permitidos)
+                if (isNewProduct) {
+                    const createPayload = {
+                        ...baseProductPayload,
+                        ...(cleanCategories !== undefined ? { categories: cleanCategories } : {}),
+                        ...(cleanProductImages !== undefined ? { productImage: cleanProductImages } : {})
                     };
-
-                    await strapi.documents('api::color.color').update({
-                        documentId: matchedExisting.documentId,
-                        data: updateData
+                    currentSavedProduct = await strapi.documents('api::product.product').create({
+                        data: createPayload
                     });
+                    productId = currentSavedProduct.documentId;
                 } else {
-                    const initialStock = Math.max(0, Number(variant.stock) || 0);
-                    const targetWhDocId =
-                        initialStock > 0
-                            ? await resolveTargetWarehouseDocId(strapi, variant.initialWarehouseId)
-                            : null;
-
-                    // Si hay almacén, crear la variante con stock: 0 para que el movimiento IN inicial
-                    // genere warehouse_stock + historial de movimientos + stock agregado sin doble conteo
-                    const createData: any = {
-                        product: productId,
-                        name: variantName,
-                        code: variantCode,
-                        stock: initialStock > 0 && !targetWhDocId ? initialStock : 0,
-                        isDiscounted: vIsDiscounted,
-                        discount: vDiscount,
-                        ...(cleanImages !== undefined ? { images: cleanImages } : {}),
-                        ...(cleanColorImage ? { colorImage: cleanColorImage } : {})
+                    const updatePayload = {
+                        ...baseProductPayload,
+                        ...(cleanCategories !== undefined ? { categories: { set: cleanCategories } } : {}),
+                        ...(cleanProductImages !== undefined ? { productImage: { set: cleanProductImages } } : {})
                     };
-
-                    const createdColor = await strapi.documents('api::color.color').create({
-                        data: createData
+                    currentSavedProduct = await strapi.documents('api::product.product').update({
+                        documentId: productId!,
+                        data: updatePayload
                     });
-                    createdVariantDocIds.push(createdColor.documentId);
+                }
 
-                    if (initialStock > 0 && targetWhDocId) {
-                        await strapi.documents('api::inventory-movement.inventory-movement').create({
-                            data: {
-                                type: 'IN',
-                                quantity: initialStock,
-                                color: createdColor.documentId,
-                                product: productId,
-                                warehouse: targetWhDocId,
-                                reason: `Stock inicial de catálogo: ${title} (${variantName})`,
-                                date: new Date().toISOString(),
-                                ...(performedById ? { performedBy: performedById } : {})
-                            } as any
+                // 2. Sincronizar variantes
+                const currentVariants = (await strapi.documents('api::color.color').findMany({
+                    filters: { product: { documentId: productId } } as any,
+                    populate: ['images', 'colorImage']
+                })) as any[];
+
+                const incomingIds = new Set(
+                    validIncomingVariants
+                        .map((v: any) => v?.documentId || v?.id)
+                        .filter(Boolean)
+                        .map((id: any) => String(id))
+                );
+
+                // Eliminar variantes removidas
+                const variantsToDelete = currentVariants.filter(
+                    (cv: any) =>
+                        !incomingIds.has(String(cv.documentId)) && !incomingIds.has(String(cv.id))
+                );
+                for (const cv of variantsToDelete) {
+                    await deleteVariantWithStockCleanup(
+                        strapi,
+                        cv.documentId,
+                        `Variante eliminada al actualizar "${title}"`,
+                        performedById,
+                        retainedMediaIds,
+                        deferredMediaQueue
+                    );
+                }
+
+                // Crear o actualizar variantes activas
+                for (const variant of validIncomingVariants) {
+                    if (!variant) continue;
+
+                    const variantName = String(variant.name || '').trim() || 'Estándar';
+                    const variantCode = String(variant.code || '000000').replace(/#/g, '').slice(0, 6) || '000000';
+                    const vIsDiscounted = Boolean(variant.isDiscounted);
+                    const vDiscount = vIsDiscounted
+                        ? Number(Math.min(100, Math.max(0, Number(variant.discount) || 0)).toFixed(2))
+                        : 0;
+
+                    const cleanImages = Array.isArray(variant.images)
+                        ? variant.images
+                              .map((img: any) => (typeof img === 'object' ? Number(img?.id) : Number(img)))
+                              .filter((id: number) => Number.isFinite(id) && id > 0)
+                        : undefined;
+
+                    let cleanColorImage: number | null | undefined = undefined;
+                    if (variant.colorImage === null) {
+                        cleanColorImage = null;
+                    } else if (variant.colorImage !== undefined) {
+                        const num = typeof variant.colorImage === 'object'
+                            ? Number(variant.colorImage?.id)
+                            : Number(variant.colorImage);
+                        if (Number.isFinite(num) && num > 0) {
+                            cleanColorImage = num;
+                        }
+                    }
+
+                    const rawVariantRef = variant.documentId || variant.id;
+                    if (rawVariantRef) {
+                        // Verificar que la variante pertenezca a este producto (anti-IDOR)
+                        const matchedExisting = currentVariants.find(
+                            (cv: any) =>
+                                String(cv.documentId) === String(rawVariantRef) ||
+                                String(cv.id) === String(rawVariantRef)
+                        );
+                        if (!matchedExisting) {
+                            throw new Error(`La variante "${variantName}" no pertenece a este producto.`);
+                        }
+
+                        // No sobrescribir `stock` en variantes existentes para no perder movimientos concurrentes
+                        const updateData: any = {
+                            name: variantName,
+                            code: variantCode,
+                            isDiscounted: vIsDiscounted,
+                            discount: vDiscount,
+                            ...(cleanImages !== undefined ? { images: { set: cleanImages } } : {}),
+                            ...(cleanColorImage !== undefined ? { colorImage: cleanColorImage } : {})
+                        };
+
+                        await strapi.documents('api::color.color').update({
+                            documentId: matchedExisting.documentId,
+                            data: updateData
                         });
+                    } else {
+                        const initialStock = Math.max(0, Number(variant.stock) || 0);
+                        const targetWhDocId =
+                            initialStock > 0
+                                ? await resolveTargetWarehouseDocId(strapi, variant.initialWarehouseId)
+                                : null;
+
+                        // Si hay almacén, crear la variante con stock: 0 para que el movimiento IN inicial
+                        // genere warehouse_stock + historial de movimientos + stock agregado sin doble conteo
+                        const createData: any = {
+                            product: productId,
+                            name: variantName,
+                            code: variantCode,
+                            stock: initialStock > 0 && !targetWhDocId ? initialStock : 0,
+                            isDiscounted: vIsDiscounted,
+                            discount: vDiscount,
+                            ...(cleanImages !== undefined ? { images: cleanImages } : {}),
+                            ...(cleanColorImage ? { colorImage: cleanColorImage } : {})
+                        };
+
+                        const createdColor = await strapi.documents('api::color.color').create({
+                            data: createData
+                        });
+
+                        if (initialStock > 0 && targetWhDocId) {
+                            await strapi.documents('api::inventory-movement.inventory-movement').create({
+                                data: {
+                                    type: 'IN',
+                                    quantity: initialStock,
+                                    color: createdColor.documentId,
+                                    product: productId,
+                                    warehouse: targetWhDocId,
+                                    reason: `Stock inicial de catálogo: ${title} (${variantName})`,
+                                    date: new Date().toISOString(),
+                                    ...(performedById ? { performedBy: performedById } : {})
+                                } as any
+                            });
+                        }
                     }
                 }
+
+                return currentSavedProduct;
+            });
+
+            if (deferredMediaQueue.length > 0) {
+                await removeMediaFilesSafely(strapi, deferredMediaQueue, retainedMediaIds);
             }
 
             return ctx.send({ success: true, data: savedProduct });
         } catch (error: any) {
             console.error('[saveFull Error]:', error);
-
-            // Rollback limpio si falló durante creación inicial
-            if (isNewProduct && savedProduct?.documentId) {
-                for (const createdColorDocId of createdVariantDocIds) {
-                    try {
-                        await deleteVariantWithStockCleanup(
-                            strapi,
-                            createdColorDocId,
-                            'Rollback de creación de producto'
-                        );
-                    } catch (rollbackColorErr) {
-                        console.error('Error rolling back variant:', rollbackColorErr);
-                    }
-                }
-                try {
-                    await strapi.documents('api::product.product').delete({
-                        documentId: savedProduct.documentId
-                    });
-                } catch (rollbackProdErr) {
-                    console.error('Rollback failed:', rollbackProdErr);
-                }
-            }
-
             return ctx.badRequest('Error guardando producto y variantes: ' + (error?.message || error));
         }
     },
@@ -595,12 +599,37 @@ export default factories.createCoreController('api::product.product', ({ strapi 
         const resolvedGlobalWhDocId = globalWarehouseId
             ? await resolveDocumentId(strapi, 'api::warehouse.warehouse', globalWarehouseId)
             : null;
-        if (globalWarehouseId && !resolvedGlobalWhDocId) {
-            return ctx.badRequest('El almacén seleccionado no existe');
+        if (globalWarehouseId) {
+            if (!resolvedGlobalWhDocId) {
+                return ctx.badRequest('El almacén seleccionado no existe');
+            }
+            const globalWh = (await strapi.documents('api::warehouse.warehouse').findOne({
+                documentId: resolvedGlobalWhDocId,
+            })) as any;
+            if (!globalWh || globalWh.isActive === false) {
+                return ctx.badRequest('El almacén seleccionado está inactivo');
+            }
         }
 
-        const errors = [];
+        const errors: string[] = [];
+        const requestedByKey = new Map<
+            string,
+            {
+                color: any;
+                targetWhDocId: string | null;
+                title: string;
+                selectedColor: string;
+                totalQty: number;
+            }
+        >();
+
         for (const item of items) {
+            const parsedQty = Number(item?.quantity);
+            if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
+                errors.push(`Cantidad inválida para ${item?.title || 'Producto'}.`);
+                continue;
+            }
+
             const colorDocId = await resolveDocumentId(strapi, 'api::color.color', item.colorId);
             const color = colorDocId
                 ? await strapi.documents('api::color.color').findOne({
@@ -613,12 +642,46 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 continue;
             }
 
-            const itemWhInput = item.warehouseId || globalWarehouseId;
-            const targetWhDocId = item.warehouseId
-                ? await resolveDocumentId(strapi, 'api::warehouse.warehouse', item.warehouseId)
-                : resolvedGlobalWhDocId;
+            let targetWhDocId = resolvedGlobalWhDocId;
+            if (item.warehouseId) {
+                const resolvedItemWhDocId = await resolveDocumentId(
+                    strapi,
+                    'api::warehouse.warehouse',
+                    item.warehouseId,
+                );
+                const itemWh = resolvedItemWhDocId
+                    ? ((await strapi.documents('api::warehouse.warehouse').findOne({
+                          documentId: resolvedItemWhDocId,
+                      })) as any)
+                    : null;
 
-            if (itemWhInput && targetWhDocId) {
+                if (!itemWh || itemWh.isActive === false) {
+                    errors.push(
+                        `El almacén seleccionado para ${item.title} (${item.selectedColor || ''}) no existe o está inactivo.`,
+                    );
+                    continue;
+                }
+                targetWhDocId = resolvedItemWhDocId;
+            }
+
+            const key = `${color.documentId}::${targetWhDocId || 'GLOBAL'}`;
+            const prev = requestedByKey.get(key);
+            if (prev) {
+                prev.totalQty = Number((prev.totalQty + parsedQty).toFixed(3));
+            } else {
+                requestedByKey.set(key, {
+                    color,
+                    targetWhDocId,
+                    title: item.title || 'Producto',
+                    selectedColor: item.selectedColor || '',
+                    totalQty: Number(parsedQty.toFixed(3)),
+                });
+            }
+        }
+
+        for (const reqEntry of requestedByKey.values()) {
+            const { color, targetWhDocId, title, selectedColor, totalQty } = reqEntry;
+            if (targetWhDocId) {
                 const whStock = await strapi.documents('api::warehouse-stock.warehouse-stock').findFirst({
                     filters: {
                         color: { documentId: color.documentId },
@@ -626,13 +689,13 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     } as any
                 });
                 const available = Number(whStock?.stock || 0);
-                if (available < Number(item.quantity)) {
+                if (available < totalQty) {
                     errors.push(
-                        `Stock insuficiente en el almacén para ${item.title} (${item.selectedColor || ''}). Pedidos: ${item.quantity}, Disponibles: ${available}.`
+                        `Stock insuficiente en el almacén para ${title} (${selectedColor}). Pedidos: ${totalQty}, Disponibles: ${available}.`
                     );
                 }
-            } else if (Number(color.stock) < Number(item.quantity)) {
-                errors.push(`Stock insuficiente para ${item.title} (${item.selectedColor || ''}). Pedidos: ${item.quantity}, Disponibles: ${color.stock}.`);
+            } else if (Number(color.stock || 0) < totalQty) {
+                errors.push(`Stock insuficiente para ${title} (${selectedColor}). Pedidos: ${totalQty}, Disponibles: ${color.stock}.`);
             }
         }
 
@@ -675,8 +738,100 @@ export default factories.createCoreController('api::product.product', ({ strapi 
      */
     async findStorefront(ctx) {
         try {
+            const ALLOWED_ROOT_FILTERS = new Set([
+                'title',
+                'slug',
+                'productCode',
+                'description',
+                'price',
+                'wholesalePrice',
+                'isActive',
+                'isWeighed',
+                'isFeaturedNew',
+                'isDiscounted',
+                'discount',
+                'hasVariants',
+                'categories',
+                'colors',
+            ]);
+            const ALLOWED_CATEGORY_FILTERS = new Set(['id', 'documentId', 'slug', 'categoryName']);
+            const ALLOWED_COLOR_FILTERS = new Set(['id', 'documentId', 'name', 'code', 'stock', 'isDiscounted', 'discount']);
+            const ALLOWED_OPERATORS = new Set([
+                '$eq', '$eqi', '$ne', '$in', '$notIn', '$lt', '$lte', '$gt', '$gte',
+                '$contains', '$containsi', '$notContains', '$notContainsi',
+                '$startsWith', '$endsWith', '$null', '$notNull', '$between',
+            ]);
+            const ALLOWED_SORT_FIELDS = new Set([
+                'createdAt', 'updatedAt', 'title', 'price', 'wholesalePrice',
+                'isFeaturedNew', 'isDiscounted', 'discount',
+            ]);
+
+            const sanitizeOperatorNode = (node: any): any => {
+                if (node === null || node === undefined) return undefined;
+                if (typeof node !== 'object' || Array.isArray(node)) return node;
+                const clean: Record<string, any> = {};
+                for (const [op, val] of Object.entries(node)) {
+                    if (ALLOWED_OPERATORS.has(op)) {
+                        clean[op] = val;
+                    }
+                }
+                return Object.keys(clean).length > 0 ? clean : undefined;
+            };
+
+            const sanitizeRelationFilter = (node: any, allowedFields: Set<string>): any => {
+                if (!node || typeof node !== 'object' || Array.isArray(node)) return undefined;
+                const clean: Record<string, any> = {};
+                for (const [k, v] of Object.entries(node)) {
+                    if (!allowedFields.has(k)) continue;
+                    const sanitized = sanitizeOperatorNode(v);
+                    if (sanitized !== undefined) clean[k] = sanitized;
+                }
+                return Object.keys(clean).length > 0 ? clean : undefined;
+            };
+
+            const sanitizeFilterNode = (node: any): Record<string, any> => {
+                if (!node || typeof node !== 'object' || Array.isArray(node)) return {};
+                const clean: Record<string, any> = {};
+                for (const [key, val] of Object.entries(node)) {
+                    if ((key === '$or' || key === '$and') && Array.isArray(val)) {
+                        const cleanGroup = val
+                            .map((sub) => sanitizeFilterNode(sub))
+                            .filter((sub) => Object.keys(sub).length > 0);
+                        if (cleanGroup.length > 0) clean[key] = cleanGroup;
+                        continue;
+                    }
+                    if (!ALLOWED_ROOT_FILTERS.has(key)) continue;
+                    if (key === 'categories') {
+                        const rel = sanitizeRelationFilter(val, ALLOWED_CATEGORY_FILTERS);
+                        if (rel) clean.categories = rel;
+                    } else if (key === 'colors') {
+                        const rel = sanitizeRelationFilter(val, ALLOWED_COLOR_FILTERS);
+                        if (rel) clean.colors = rel;
+                    } else {
+                        const op = sanitizeOperatorNode(val);
+                        if (op !== undefined) clean[key] = op;
+                    }
+                }
+                return clean;
+            };
+
+            const sanitizeSort = (rawSort: any): any => {
+                if (!rawSort) return undefined;
+                const items = Array.isArray(rawSort) ? rawSort : [rawSort];
+                const clean = items
+                    .filter((entry) => typeof entry === 'string')
+                    .map((entry: string) => {
+                        const [field, dir] = entry.split(':');
+                        if (!ALLOWED_SORT_FIELDS.has(field)) return null;
+                        const cleanDir = dir?.toLowerCase() === 'desc' ? 'desc' : 'asc';
+                        return `${field}:${cleanDir}`;
+                    })
+                    .filter(Boolean);
+                return clean.length > 0 ? clean : undefined;
+            };
+
             const params = buildAdminFindParams(ctx.query);
-            const rawFilters = params.filters && typeof params.filters === 'object' ? { ...params.filters } : {};
+            const rawFilters = sanitizeFilterNode(params.filters);
 
             if (ctx.query?.slug) {
                 rawFilters.slug = { $eq: String(ctx.query.slug) };
@@ -688,6 +843,7 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             rawFilters.isActive = { $eq: true };
 
             const requireInStock = Boolean(rawFilters?.colors?.stock?.$gt !== undefined);
+            const requireDiscounted = String(ctx.query?.discounted || '').toLowerCase() === 'true';
 
             const companySetting = await (strapi.documents('api::company-setting.company-setting' as any) as any)
                 .findFirst()
@@ -728,9 +884,10 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 }
             };
 
+            const safeSort = sanitizeSort(params.sort);
             const allMatching: any[] = await strapi.documents('api::product.product').findMany({
                 filters: dbFilters,
-                ...(params.sort ? { sort: params.sort } : {}),
+                ...(safeSort ? { sort: safeSort } : {}),
                 populate: storefrontPopulate,
                 limit: 5000
             });
@@ -767,24 +924,32 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     };
                 })
                 .filter((product) => {
-                    if (!requireInStock) return true;
-                    return product.colors.some((color: any) => Number(color.stock || 0) > 0);
+                    if (requireInStock && !product.colors.some((color: any) => Number(color.stock || 0) > 0)) {
+                        return false;
+                    }
+                    if (requireDiscounted) {
+                        const prodDisc = product.isDiscounted && Number(product.discount || 0) > 0;
+                        const varDisc = product.colors.some((c: any) => c.isDiscounted && Number(c.discount || 0) > 0);
+                        const catDisc = Array.isArray(product.categories) &&
+                            product.categories.some((cat: any) => Number(cat?.discount ?? cat?.Discount ?? 0) > 0);
+                        if (!prodDisc && !varDisc && !catDisc) return false;
+                    }
+                    return true;
                 });
 
             const total = sanitized.length;
             const start = Number.isFinite(Number(params.start)) && Number(params.start) >= 0 ? Number(params.start) : 0;
-            const requestedLimit = Number(params.limit);
-            const paged =
-                Number.isFinite(requestedLimit) && requestedLimit > 0
-                    ? sanitized.slice(start, start + requestedLimit)
-                    : sanitized.slice(start);
+            const rawRequestedLimit = Number(params.limit);
+            const hasRequestedLimit = Number.isFinite(rawRequestedLimit) && rawRequestedLimit > 0;
+            const effectiveLimit = hasRequestedLimit ? Math.min(100, rawRequestedLimit) : Math.min(200, Math.max(total - start, 0));
+            const paged = sanitized.slice(start, start + effectiveLimit);
 
             return ctx.send({
                 data: paged,
                 meta: {
                     pagination: {
                         start,
-                        limit: Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : total,
+                        limit: hasRequestedLimit ? effectiveLimit : total,
                         total
                     }
                 }

@@ -1,5 +1,6 @@
 import { errors } from '@strapi/utils';
-const { PolicyError } = errors;
+import { isSuperAdminRole } from '../utils/adminCrud';
+const { PolicyError, UnauthorizedError } = errors;
 
 /**
  * Infiere el permiso CRUD estándar de Strapi a partir del handler de la ruta y el verbo HTTP
@@ -64,7 +65,7 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
     }
 
     if (!token) {
-        throw new PolicyError('No autenticado: Falta el token');
+        throw new UnauthorizedError('No autenticado: Falta el token');
     }
 
     // 3. Verificar firma y validez del JWT por separado para no enmascarar errores de permisos (403)
@@ -73,12 +74,12 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
         decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
     } catch (jwtErr: any) {
         console.error('[is-admin policy] Error verificando JWT:', jwtErr.message || jwtErr);
-        throw new PolicyError('Token inválido o expirado');
+        throw new UnauthorizedError('Token inválido o expirado');
     }
 
     if (!decoded || !decoded.id) {
         console.error('[is-admin policy] Token inválido: decoded object is null or missing id');
-        throw new PolicyError('Token inválido');
+        throw new UnauthorizedError('Token inválido');
     }
 
     // 4. Buscar al usuario y su rol
@@ -89,7 +90,7 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
 
     if (!user) {
         console.error('[is-admin policy] Usuario no encontrado para el id:', decoded.id);
-        throw new PolicyError('Usuario no encontrado');
+        throw new UnauthorizedError('Usuario no encontrado');
     }
 
     if (user.blocked) {
@@ -102,7 +103,7 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
     const roleType = (user.role?.type || '').toLowerCase();
     const roleName = (user.role?.name || '').toLowerCase();
     const userRole = roleType || roleName;
-    const isSuperAdmin = roleType === 'admin' || roleType.includes('admin') || roleName.includes('admin');
+    const isSuperAdmin = isSuperAdminRole(user.role);
 
     if (isSuperAdmin) {
         policyContext.state.user = user;

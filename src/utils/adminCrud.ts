@@ -1,5 +1,105 @@
 import { buildAdminFindParams } from './adminQuery';
 
+export const SAFE_USER_FIELDS = [
+  'id',
+  'documentId',
+  'username',
+  'email',
+  'fullname',
+  'phone',
+  'address',
+  'city',
+  'state',
+  'ci',
+  'price_type',
+  'blocked',
+  'confirmed',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+export const SAFE_USER_POPULATE = {
+  fields: [...SAFE_USER_FIELDS],
+};
+
+export const SAFE_USER_DB_POPULATE = {
+  select: [...SAFE_USER_FIELDS],
+};
+
+const PRIVATE_USER_KEYS = ['password', 'resetPasswordToken', 'confirmationToken'] as const;
+const USER_RELATION_KEYS = new Set(['performedBy', 'customer', 'user']);
+
+export function isSuperAdminRole(role: any): boolean {
+  if (!role) return false;
+  const roleType = String(role.type || '').trim().toLowerCase();
+  const roleName = String(role.name || '').trim().toLowerCase();
+  if (roleType === 'admin' || roleType === 'super_admin') return true;
+  if (!roleType && (roleName === 'admin' || roleName === 'super admin')) return true;
+  return false;
+}
+
+export function sanitizeUserOutput<T>(user: T): T {
+  if (!user || typeof user !== 'object' || Array.isArray(user)) return user;
+  const clean: Record<string, any> = { ...(user as Record<string, any>) };
+  for (const secretKey of PRIVATE_USER_KEYS) {
+    delete clean[secretKey];
+  }
+  return clean as T;
+}
+
+export function sanitizeEntityUserRelations<T>(payload: T, extraKeys: string[] = []): T {
+  if (!payload || typeof payload !== 'object') return payload;
+  if (Array.isArray(payload)) {
+    return payload.map((item) => sanitizeEntityUserRelations(item, extraKeys)) as unknown as T;
+  }
+
+  const targetKeys = new Set([...USER_RELATION_KEYS, ...extraKeys]);
+  const copy: Record<string, any> = { ...(payload as Record<string, any>) };
+
+  for (const key of Object.keys(copy)) {
+    if (targetKeys.has(key) && copy[key] !== null && copy[key] !== undefined) {
+      copy[key] = Array.isArray(copy[key])
+        ? copy[key].map((entry: any) => sanitizeUserOutput(entry))
+        : sanitizeUserOutput(copy[key]);
+    }
+  }
+
+  return copy as T;
+}
+
+function clampUserPopulateEntries(
+  populateObj: Record<string, any>,
+  allowedRootKeys?: Set<string>,
+  isRoot = true,
+): Record<string, any> {
+  const result: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(populateObj || {})) {
+    if (isRoot && allowedRootKeys && !allowedRootKeys.has(key)) {
+      continue;
+    }
+
+    if (USER_RELATION_KEYS.has(key)) {
+      result[key] = { fields: [...SAFE_USER_FIELDS] };
+      continue;
+    }
+
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = { ...(value as Record<string, any>) };
+      if (nested.populate && typeof nested.populate === 'object' && !Array.isArray(nested.populate)) {
+        nested.populate = clampUserPopulateEntries(nested.populate, undefined, false);
+      } else if (nested.populate === '*') {
+        delete nested.populate;
+      }
+      result[key] = nested;
+    } else if (value === '*' || value === true) {
+      result[key] = true;
+    }
+  }
+
+  return result;
+}
+
 export async function resolveEntityDocumentId(
   strapi: any,
   uid: string,
@@ -168,17 +268,35 @@ function mergePopulateObjects(
   return merged;
 }
 
-export function mergePopulate(queryPopulate: any, defaultPopulate?: any): any {
-  if (queryPopulate === '*') return '*';
-  if (!defaultPopulate) return queryPopulate;
-  if (!queryPopulate) {
-    return defaultPopulate === '*' ? '*' : normalizePopulateObject(defaultPopulate);
-  }
-  if (defaultPopulate === '*') return queryPopulate;
+export function mergePopulate(
+  queryPopulate: any,
+  defaultPopulate?: any,
+  allowedRootKeys?: string[],
+): any {
+  const allowedSet = Array.isArray(allowedRootKeys) ? new Set(allowedRootKeys) : undefined;
+  const hasDefaults = defaultPopulate !== undefined && defaultPopulate !== null && defaultPopulate !== '*';
+  const normalizedDefaults = hasDefaults ? normalizePopulateObject(defaultPopulate) : undefined;
 
-  return mergePopulateObjects(
-    normalizePopulateObject(defaultPopulate),
-    normalizePopulateObject(queryPopulate)
+  if (!queryPopulate) {
+    return normalizedDefaults ? clampUserPopulateEntries(normalizedDefaults) : undefined;
+  }
+
+  if (queryPopulate === '*') {
+    return normalizedDefaults ? clampUserPopulateEntries(normalizedDefaults) : undefined;
+  }
+
+  const normalizedQuery = clampUserPopulateEntries(
+    normalizePopulateObject(queryPopulate),
+    allowedSet,
+    true,
+  );
+
+  if (!normalizedDefaults) {
+    return Object.keys(normalizedQuery).length > 0 ? normalizedQuery : undefined;
+  }
+
+  return clampUserPopulateEntries(
+    mergePopulateObjects(normalizedDefaults, normalizedQuery),
   );
 }
 
@@ -191,10 +309,7 @@ export function extractPayloadData(body: any): Record<string, any> {
 
 export async function userHasExactPermission(strapi: any, user: any, action: string): Promise<boolean> {
   if (!user) return false;
-  const roleType = String(user.role?.type || '').toLowerCase();
-  const roleName = String(user.role?.name || '').toLowerCase();
-  const isSuperAdmin = roleType === 'admin' || roleType.includes('admin') || roleName.includes('admin');
-  if (isSuperAdmin) return true;
+  if (isSuperAdminRole(user.role)) return true;
 
   const roleId = user.role?.id;
   if (!roleId) return false;
@@ -207,11 +322,14 @@ export async function userHasExactPermission(strapi: any, user: any, action: str
 
 interface AdminCrudOptions {
   defaultPopulate?: any;
+  allowedPopulateKeys?: string[];
   defaultStatus?: 'published' | 'draft';
   injectPerformedBy?: boolean;
   forcePublishedStatus?: boolean;
+  transactional?: boolean;
   beforeCreate?: (strapi: any, data: Record<string, any>, ctx: any) => Promise<Record<string, any>> | Record<string, any>;
   beforeUpdate?: (strapi: any, documentId: string, data: Record<string, any>, ctx: any) => Promise<Record<string, any>> | Record<string, any>;
+  beforeDelete?: (strapi: any, documentId: string, ctx: any) => Promise<void> | void;
 }
 
 export function createAdminCrudHandlers(strapi: any, uid: string, options: AdminCrudOptions = {}) {
@@ -219,14 +337,14 @@ export function createAdminCrudHandlers(strapi: any, uid: string, options: Admin
     async findAdmin(ctx: any) {
       try {
         const params = buildAdminFindParams(ctx.query);
-        const populate = mergePopulate(params.populate, options.defaultPopulate);
+        const populate = mergePopulate(params.populate, options.defaultPopulate, options.allowedPopulateKeys);
         const status = params.status || options.defaultStatus;
         const entities = await strapi.documents(uid).findMany({
           ...params,
           ...(status ? { status } : {}),
           ...(populate !== undefined ? { populate } : {}),
         });
-        return ctx.send({ data: entities });
+        return ctx.send({ data: sanitizeEntityUserRelations(entities) });
       } catch (err: any) {
         console.error(`[${uid}] Error en findAdmin:`, err);
         return ctx.internalServerError(err?.message || 'Error consultando registros');
@@ -238,13 +356,13 @@ export function createAdminCrudHandlers(strapi: any, uid: string, options: Admin
         const docId = await resolveEntityDocumentId(strapi, uid, ctx.params?.id);
         if (!docId) return ctx.notFound('Registro no encontrado');
 
-        const populate = mergePopulate(ctx.query?.populate, options.defaultPopulate);
+        const populate = mergePopulate(ctx.query?.populate, options.defaultPopulate, options.allowedPopulateKeys);
         const entity = await strapi.documents(uid).findOne({
           documentId: docId,
           ...(populate !== undefined ? { populate } : {}),
         });
         if (!entity) return ctx.notFound('Registro no encontrado');
-        return ctx.send({ data: entity });
+        return ctx.send({ data: sanitizeEntityUserRelations(entity) });
       } catch (err: any) {
         console.error(`[${uid}] Error en findOneAdmin:`, err);
         return ctx.internalServerError(err?.message || 'Error consultando registro');
@@ -253,22 +371,28 @@ export function createAdminCrudHandlers(strapi: any, uid: string, options: Admin
 
     async createAdmin(ctx: any) {
       try {
-        let data = extractPayloadData(ctx.request.body);
+        const executeCreate = async () => {
+          let data = extractPayloadData(ctx.request.body);
 
-        if (options.injectPerformedBy && ctx.state?.user?.id && data.performedBy === undefined) {
-          data.performedBy = ctx.state.user.id;
-        }
-        if (options.beforeCreate) {
-          data = await options.beforeCreate(strapi, data, ctx);
-        }
+          if (options.injectPerformedBy && ctx.state?.user?.id && data.performedBy === undefined) {
+            data.performedBy = ctx.state.user.id;
+          }
+          if (options.beforeCreate) {
+            data = await options.beforeCreate(strapi, data, ctx);
+          }
 
-        const populate = mergePopulate(ctx.query?.populate, options.defaultPopulate);
-        const created = await strapi.documents(uid).create({
-          data,
-          ...(options.forcePublishedStatus ? { status: 'published' } : {}),
-          ...(populate !== undefined ? { populate } : {}),
-        });
-        return ctx.send({ data: created });
+          const populate = mergePopulate(ctx.query?.populate, options.defaultPopulate, options.allowedPopulateKeys);
+          return strapi.documents(uid).create({
+            data,
+            ...(options.forcePublishedStatus ? { status: 'published' } : {}),
+            ...(populate !== undefined ? { populate } : {}),
+          });
+        };
+
+        const created = options.transactional
+          ? await strapi.db.transaction(executeCreate)
+          : await executeCreate();
+        return ctx.send({ data: sanitizeEntityUserRelations(created) });
       } catch (err: any) {
         const status = err?.status || err?.statusCode;
         if (status && status >= 400 && status < 500) {
@@ -281,22 +405,32 @@ export function createAdminCrudHandlers(strapi: any, uid: string, options: Admin
 
     async updateAdmin(ctx: any) {
       try {
-        const docId = await resolveEntityDocumentId(strapi, uid, ctx.params?.id);
-        if (!docId) return ctx.notFound('Registro no encontrado');
+        const executeUpdate = async () => {
+          const docId = await resolveEntityDocumentId(strapi, uid, ctx.params?.id);
+          if (!docId) {
+            const notFoundErr: any = new Error('Registro no encontrado');
+            notFoundErr.status = 404;
+            throw notFoundErr;
+          }
 
-        let data = extractPayloadData(ctx.request.body);
-        if (options.beforeUpdate) {
-          data = await options.beforeUpdate(strapi, docId, data, ctx);
-        }
+          let data = extractPayloadData(ctx.request.body);
+          if (options.beforeUpdate) {
+            data = await options.beforeUpdate(strapi, docId, data, ctx);
+          }
 
-        const populate = mergePopulate(ctx.query?.populate, options.defaultPopulate);
-        const updated = await strapi.documents(uid).update({
-          documentId: docId,
-          data,
-          ...(options.forcePublishedStatus ? { status: 'published' } : {}),
-          ...(populate !== undefined ? { populate } : {}),
-        });
-        return ctx.send({ data: updated });
+          const populate = mergePopulate(ctx.query?.populate, options.defaultPopulate, options.allowedPopulateKeys);
+          return strapi.documents(uid).update({
+            documentId: docId,
+            data,
+            ...(options.forcePublishedStatus ? { status: 'published' } : {}),
+            ...(populate !== undefined ? { populate } : {}),
+          });
+        };
+
+        const updated = options.transactional
+          ? await strapi.db.transaction(executeUpdate)
+          : await executeUpdate();
+        return ctx.send({ data: sanitizeEntityUserRelations(updated) });
       } catch (err: any) {
         const status = err?.status || err?.statusCode;
         if (status && status >= 400 && status < 500) {
@@ -312,9 +446,17 @@ export function createAdminCrudHandlers(strapi: any, uid: string, options: Admin
         const docId = await resolveEntityDocumentId(strapi, uid, ctx.params?.id);
         if (!docId) return ctx.notFound('Registro no encontrado');
 
+        if (options.beforeDelete) {
+          await options.beforeDelete(strapi, docId, ctx);
+        }
+
         const deleted = await strapi.documents(uid).delete({ documentId: docId });
         return ctx.send({ data: deleted });
       } catch (err: any) {
+        const status = err?.status || err?.statusCode;
+        if (status && status >= 400 && status < 500) {
+          return ctx.throw(status, err.message || 'Solicitud inválida');
+        }
         console.error(`[${uid}] Error en deleteAdmin:`, err);
         return ctx.badRequest(err?.message || 'Error al eliminar registro');
       }

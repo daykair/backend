@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { normalizeComparablePhone } from '../../order/utils/publicOrder';
 
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const ACCESS_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -360,6 +361,13 @@ export default {
         return ctx.unauthorized('Credenciales inválidas.');
       }
 
+      const roleType = String(user.role?.type || '').toLowerCase();
+      const roleName = String(user.role?.name || '').toLowerCase();
+      const allowedCustomerRoles = new Set(['client', 'cliente', 'customer', 'authenticated']);
+      if (!allowedCustomerRoles.has(roleType) && !allowedCustomerRoles.has(roleName)) {
+        return ctx.forbidden('Las cuentas administrativas no pueden iniciar sesión desde la tienda.');
+      }
+
       if (user.blocked) {
         return ctx.forbidden('Tu cuenta ha sido suspendida. Contacta con soporte.');
       }
@@ -452,18 +460,25 @@ export default {
         provider: 'local',
       });
 
-      // Vincular órdenes previas hechas como invitado con este mismo correo
-      const priorOrders: any[] = await strapi.db.query('api::order.order').findMany({
-        where: { email: cleanEmail },
-        populate: ['customer'],
-      });
-      for (const ord of priorOrders) {
-        const custEmail = String(ord?.customer?.email || '').toLowerCase();
-        if (!ord.customer || custEmail.endsWith('@cliente.local')) {
-          await strapi.db.query('api::order.order').update({
-            where: { id: ord.id },
-            data: { customer: newUser.id },
-          });
+      // Solo vincular órdenes previas hechas como invitado si coinciden correo Y teléfono normalizado
+      const targetPhoneDigits = normalizeComparablePhone(cleanPhone);
+      if (targetPhoneDigits.length >= 7) {
+        const priorOrders: any[] = await strapi.db.query('api::order.order').findMany({
+          where: { email: cleanEmail },
+          populate: {
+            customer: { select: ['id', 'email'] },
+          },
+        });
+        for (const ord of priorOrders) {
+          const custEmail = String(ord?.customer?.email || '').toLowerCase();
+          const ordPhoneDigits = normalizeComparablePhone(ord?.phone);
+          const phonesMatch = ordPhoneDigits.length >= 7 && ordPhoneDigits === targetPhoneDigits;
+          if (phonesMatch && (!ord.customer || custEmail.endsWith('@cliente.local'))) {
+            await strapi.db.query('api::order.order').update({
+              where: { id: ord.id },
+              data: { customer: newUser.id },
+            });
+          }
         }
       }
 

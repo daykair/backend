@@ -1,6 +1,10 @@
 import { factories } from '@strapi/strapi';
 import * as crypto from 'crypto';
-import { resolveEntityDocumentId } from '../../../utils/adminCrud';
+import {
+  resolveEntityDocumentId,
+  SAFE_USER_DB_POPULATE,
+  sanitizeEntityUserRelations,
+} from '../../../utils/adminCrud';
 
 function toCaracasDateStr(raw: unknown): string {
   if (!raw) return '';
@@ -471,14 +475,19 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
 
           const result = await dbQuery('api::order.order').findOne({
             where: { id: savedOrder.id },
-            populate: ['dispatchWarehouse', 'customer', 'performedBy', 'referenceImage'],
+            populate: {
+              dispatchWarehouse: true,
+              customer: SAFE_USER_DB_POPULATE,
+              performedBy: SAFE_USER_DB_POPULATE,
+              referenceImage: true,
+            },
             transacting: trx,
           });
 
           const previousNormStatus = existingOrder?.orderStatus
             ? normalizeOrderStatus(existingOrder.orderStatus)
             : null;
-          return { result, previousNormStatus };
+          return { result: sanitizeEntityUserRelations(result), previousNormStatus };
         } catch (e) {
           console.error('------- TRANSACTION ERROR DETECTED -------');
           console.error(e);
@@ -508,12 +517,12 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
       const isCancelled =
         normalizedStatus === 'cancelled' || normalizedStatus === 'returned';
       const shouldDeduct =
-        normalizedStatus !== 'pending' &&
         normalizedStatus !== 'failed_verification' &&
+        !isCancelled &&
         (normalizedStatus === 'payment_confirmed' ||
           normalizedStatus === 'delivered' ||
-          order.orderType === 'credit' ||
-          order.orderType === 'apartado' ||
+          (normalizedStatus !== 'pending' &&
+            (order.orderType === 'credit' || order.orderType === 'apartado')) ||
           (order.orderType === 'cashea' && Number(order.amountPaid) > 0));
 
       let dispatchWarehouse = normalizeIdentifier(order.dispatchWarehouse);
@@ -958,19 +967,21 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
 
       filteredOrders.forEach((order: any) => {
         const orderDateStr = toCaracasDateStr(order.createdAt || order.orderPlaced);
-        const st = String(order.orderStatus || '').toLowerCase();
-        const isActive = st !== 'cancelled' && st !== 'returned';
+        const st = String(normalizeOrderStatus(order.orderStatus) || '').toLowerCase();
+        const isLayawayType =
+          order.orderType === 'apartado' || order.orderType === 'credit' || order.orderType === 'cashea';
+        const amount = isLayawayType ? Number(order.amountPaid) || 0 : Number(order.orderTotal) || 0;
+        const isUnpaidPending =
+          (st === 'pending' || st === 'pending_verification' || st === 'failed_verification') &&
+          (!isLayawayType || amount <= 0);
+        const isActive = st !== 'cancelled' && st !== 'returned' && !isUnpaidPending;
+
+        if (!isActive) return;
 
         const inKpiWindow = orderDateStr >= kpiStartStr && orderDateStr <= kpiEndStr;
         if (inKpiWindow) {
           totalOrders++;
         }
-
-        if (!isActive) return;
-
-        const isLayawayType =
-          order.orderType === 'apartado' || order.orderType === 'credit' || order.orderType === 'cashea';
-        const amount = isLayawayType ? Number(order.amountPaid) || 0 : Number(order.orderTotal) || 0;
 
         const orderItems = Array.isArray(order.orderItems)
           ? order.orderItems
@@ -1116,7 +1127,12 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
       return await strapi.db.transaction(async (trx) => {
         const order = await dbQuery('api::order.order').findOne({
           where,
-          populate: ['dispatchWarehouse', 'performedBy', 'customer', 'referenceImage'],
+          populate: {
+            dispatchWarehouse: true,
+            performedBy: SAFE_USER_DB_POPULATE,
+            customer: SAFE_USER_DB_POPULATE,
+            referenceImage: true,
+          },
           transacting: trx,
         });
 
@@ -1132,14 +1148,28 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           err.status = 400;
           throw err;
         }
-        if (currentStatus === 'pending' || currentStatus === 'failed_verification') {
-          if (order.orderType !== 'apartado' && order.orderType !== 'credit') {
-            const err: any = new Error(
-              'El pedido aún no ha descontado inventario confirmado para procesar una devolución.',
-            );
-            err.status = 400;
-            throw err;
-          }
+
+        const saleReasonMatches: any[] = [];
+        if (order.id) saleReasonMatches.push({ order: order.id });
+        if (order.documentId) saleReasonMatches.push({ order: { documentId: order.documentId } });
+        saleReasonMatches.push({ reason: { $contains: `Pedido #${order.documentId || order.id}` } });
+
+        const existingOutSale = await dbQuery('api::inventory-movement.inventory-movement').findOne({
+          where: {
+            $or: saleReasonMatches,
+            type: 'OUT',
+            reason: { $contains: 'Venta automática por lote' },
+          },
+          select: ['id'],
+          transacting: trx,
+        });
+
+        if (!existingOutSale) {
+          const err: any = new Error(
+            'El pedido aún no ha descontado inventario confirmado para procesar una devolución.',
+          );
+          err.status = 400;
+          throw err;
         }
 
         const requestedLines = Array.isArray(payload.items)
@@ -1274,12 +1304,17 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
 
         const updatedOrder = await dbQuery('api::order.order').findOne({
           where: { id: order.id },
-          populate: ['dispatchWarehouse', 'customer', 'performedBy', 'referenceImage'],
+          populate: {
+            dispatchWarehouse: true,
+            customer: SAFE_USER_DB_POPULATE,
+            performedBy: SAFE_USER_DB_POPULATE,
+            referenceImage: true,
+          },
           transacting: trx,
         });
 
         return {
-          order: updatedOrder,
+          order: sanitizeEntityUserRelations(updatedOrder),
           returnedQuantity: totalReturnedNow,
           creditApplied,
           fullyReturned: allReturned,
@@ -1754,10 +1789,22 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           : { documentId: String(rawImg) };
         const fileRow = await strapi.db.query('plugin::upload.file').findOne({
           where: fileFilter,
+          select: ['id', 'mime'],
+        });
+        if (!fileRow || !String(fileRow.mime || '').toLowerCase().startsWith('image/')) {
+          const err: any = new Error('Comprobante de imagen inválido');
+          err.status = 400;
+          throw err;
+        }
+        const alreadyUsed = await strapi.db.query('api::order.order').findOne({
+          where: {
+            referenceImage: fileRow.id,
+            id: { $ne: existing.id },
+          },
           select: ['id'],
         });
-        if (!fileRow) {
-          const err: any = new Error('Comprobante de imagen inválido');
+        if (alreadyUsed) {
+          const err: any = new Error('Este archivo ya está asociado a otro pedido');
           err.status = 400;
           throw err;
         }

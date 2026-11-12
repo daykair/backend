@@ -1,11 +1,40 @@
 import { factories } from '@strapi/strapi';
 import https from 'https';
 
-function fetchHtmlBcvIgnoreSsl(): Promise<string> {
+export function parseBcvRateNumber(raw: string): number {
+  const cleaned = String(raw || '').replace(/[^\d.,]/g, '').trim();
+  if (!cleaned) return NaN;
+
+  const lastComma = cleaned.lastIndexOf(',');
+  const lastDot = cleaned.lastIndexOf('.');
+
+  let normalized = cleaned;
+  if (lastComma !== -1 && lastDot !== -1) {
+    if (lastComma > lastDot) {
+      // Formato venezolano/europeo: 1.234,5678 -> quitar puntos de miles, coma a punto decimal
+      normalized = cleaned.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Formato anglosajón: 1,234.5678 -> quitar comas de miles
+      normalized = cleaned.replace(/,/g, '');
+    }
+  } else if (lastComma !== -1) {
+    // Múltiples comas => miles, una coma => decimal
+    const commaCount = (cleaned.match(/,/g) || []).length;
+    normalized = commaCount > 1 ? cleaned.replace(/,/g, '') : cleaned.replace(',', '.');
+  } else if (lastDot !== -1) {
+    const dotCount = (cleaned.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      normalized = cleaned.replace(/\./g, '');
+    }
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? Number(parsed.toFixed(4)) : NaN;
+}
+
+function fetchHtmlBcv(rejectUnauthorized: boolean): Promise<string> {
   return new Promise((resolve, reject) => {
-    const agent = new https.Agent({
-      rejectUnauthorized: false // <-- Ignora errores de certificados SSL auto-firmados o vencidos del BCV
-    });
+    const agent = new https.Agent({ rejectUnauthorized });
 
     const options = {
       hostname: 'www.bcv.org.ve',
@@ -13,17 +42,24 @@ function fetchHtmlBcvIgnoreSsl(): Promise<string> {
       path: '/',
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept': 'text/html',
-        'Accept-Language': 'es-ES,es;q=0.9',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html',
+        'Accept-Language': 'es-VE,es;q=0.9',
         'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
+        Pragma: 'no-cache',
       },
-      agent: agent,
-      timeout: 10000 // 10 segundos de timeout
+      agent,
+      timeout: 10000,
     };
 
     const req = https.request(options, (res) => {
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        res.resume();
+        reject(new Error(`BCV respondió con estado HTTP ${res.statusCode}`));
+        return;
+      }
+
       let data = '';
       res.on('data', (chunk) => {
         data += chunk;
@@ -46,33 +82,69 @@ function fetchHtmlBcvIgnoreSsl(): Promise<string> {
   });
 }
 
+function isOutlierRate(candidate: number, referenceRate: number | null): boolean {
+  if (!Number.isFinite(candidate) || candidate <= 0) return true;
+  if (!referenceRate || !Number.isFinite(referenceRate) || referenceRate <= 0) return false;
+  return candidate < referenceRate * 0.25 || candidate > referenceRate * 4;
+}
+
 export default factories.createCoreService('api::exchange-rate.exchange-rate', () => ({
   async updateBcvRate() {
     let rate: number | null = null;
     let rateDate: string = new Date().toISOString();
     let source = 'Manual';
 
-    console.log('[BCV Scraper] Iniciando proceso de raspado de tasa oficial...');
+    const cachedRateRecord = await global.strapi
+      .documents('api::exchange-rate.exchange-rate')
+      .findFirst()
+      .catch(() => null);
+    const previousRate =
+      cachedRateRecord?.rate && Number(cachedRateRecord.rate) > 0
+        ? Number(cachedRateRecord.rate)
+        : null;
 
-    // INTENTO 1: Raspado directo de la web oficial del BCV ignorando validación de certificados SSL
+    console.log('[BCV Scraper] Iniciando proceso de obtención de tasa oficial...');
+
+    // INTENTO 1: Raspado directo de la web oficial del BCV (TLS verificado primero; respaldo TLS solo ante error de cadena CA del BCV)
     try {
-      const html = await fetchHtmlBcvIgnoreSsl();
-      
-      // Regex ligera para ubicar la tasa del dólar en el contenedor id="dolar" robusta ante atributos/clases del tag strong
-      const match = html.match(/id="dolar"[\s\S]*?<strong[^>]*?>\s*([0-9.,]+)\s*<\/strong>/i);
-      if (match) {
-        const rawValue = match[1].replace(',', '.').trim();
-        const parsedRate = parseFloat(rawValue);
-        if (!isNaN(parsedRate) && parsedRate > 0) {
-          rate = parsedRate;
-          source = 'BCV';
-          console.log(`[BCV Scraper] Tasa raspada con éxito desde el BCV (Ignorando SSL): Bs. ${rate}`);
+      let html: string;
+      try {
+        html = await fetchHtmlBcv(true);
+      } catch (tlsErr: any) {
+        const msg = String(tlsErr?.code || tlsErr?.message || '');
+        const isCertError =
+          msg.includes('CERT') ||
+          msg.includes('UNABLE_TO_VERIFY') ||
+          msg.includes('SELF_SIGNED') ||
+          msg.includes('certificate');
+        if (!isCertError || process.env.ALLOW_INSECURE_BCV_TLS === 'false') {
+          throw tlsErr;
         }
-      } else {
+        console.warn('[BCV Scraper] Certificados SSL del BCV no confiables en este host; reintentando conexión de respaldo sin verificación CA.');
+        html = await fetchHtmlBcv(false);
+      }
+
+      const match = html.match(/id="dolar"[\s\S]*?<strong[^>]*?>\s*([0-9.,]+)\s*<\/strong>/i);
+      if (!match) {
         throw new Error('No se encontró el contenedor id="dolar" en el HTML del BCV');
       }
+
+      const parsedRate = parseBcvRateNumber(match[1]);
+      if (isNaN(parsedRate) || parsedRate <= 0) {
+        throw new Error(`Valor raspado inválido del BCV: "${match[1]}"`);
+      }
+
+      if (isOutlierRate(parsedRate, previousRate)) {
+        console.warn(
+          `[BCV Scraper] Tasa raspada (${parsedRate}) desviada respecto a la tasa previa (${previousRate}); contrastando con DolarApi.`,
+        );
+      } else {
+        rate = parsedRate;
+        source = 'BCV';
+        console.log(`[BCV Scraper] Tasa raspada con éxito desde el BCV: Bs. ${rate}`);
+      }
     } catch (err: any) {
-      console.warn(`[BCV Scraper] Intento 1 (BCV Web con SSL omitido) falló o dio timeout: ${err.message}`);
+      console.warn(`[BCV Scraper] Intento 1 (BCV Web) falló: ${err.message}`);
     }
 
     // INTENTO 2 (Fallback): Consulta a DolarApi oficial

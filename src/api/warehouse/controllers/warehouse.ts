@@ -1,8 +1,113 @@
+import crypto from 'crypto';
 import { factories } from '@strapi/strapi';
 import { createAdminCrudHandlers } from '../../../utils/adminCrud';
 
+const generateOperationCode = (prefix: string) =>
+  `${prefix}-${Math.floor(Date.now() / 1000)}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+
 export default factories.createCoreController('api::warehouse.warehouse', ({ strapi }) => {
-  const crud = createAdminCrudHandlers(strapi, 'api::warehouse.warehouse');
+  const ensureUniqueWarehouseCode = async (
+    strapiRef: any,
+    rawCode: unknown,
+    excludeDocId?: string,
+  ) => {
+    const normalized = String(rawCode || '').trim().toUpperCase();
+    if (!normalized) {
+      const err: any = new Error('El código del almacén es obligatorio.');
+      err.status = 400;
+      throw err;
+    }
+
+    const existingAll = (await strapiRef.documents('api::warehouse.warehouse').findMany({
+      fields: ['documentId', 'code'],
+      limit: -1,
+    })) as any[];
+
+    const collision = existingAll.find(
+      (wh) =>
+        wh?.documentId !== excludeDocId &&
+        String(wh?.code || '').trim().toUpperCase() === normalized,
+    );
+
+    if (collision) {
+      const err: any = new Error(`Ya existe un almacén con el código "${normalized}".`);
+      err.status = 409;
+      throw err;
+    }
+    return normalized;
+  };
+
+  const crud = createAdminCrudHandlers(strapi, 'api::warehouse.warehouse', {
+    beforeCreate: async (strapiRef, data) => {
+      const name = String(data.name || '').trim();
+      if (!name) {
+        const err: any = new Error('El nombre del almacén es obligatorio.');
+        err.status = 400;
+        throw err;
+      }
+      data.name = name;
+      data.code = await ensureUniqueWarehouseCode(strapiRef, data.code);
+      return data;
+    },
+    beforeUpdate: async (strapiRef, docId, data) => {
+      if (data.name !== undefined) {
+        const name = String(data.name || '').trim();
+        if (!name) {
+          const err: any = new Error('El nombre del almacén no puede estar vacío.');
+          err.status = 400;
+          throw err;
+        }
+        data.name = name;
+      }
+      if (data.code !== undefined) {
+        data.code = await ensureUniqueWarehouseCode(strapiRef, data.code, docId);
+      }
+      return data;
+    },
+    beforeDelete: async (strapiRef, docId) => {
+      const nonZeroStock = await strapiRef.documents('api::warehouse-stock.warehouse-stock').findFirst({
+        filters: {
+          warehouse: { documentId: docId },
+          stock: { $gt: 0 },
+        } as any,
+      });
+      if (nonZeroStock) {
+        const err: any = new Error(
+          'No se puede eliminar un almacén que aún tiene existencias de inventario. Transfiere o ajusta el stock a 0 primero.',
+        );
+        err.status = 400;
+        throw err;
+      }
+
+      const activeOrder = await strapiRef.documents('api::order.order').findFirst({
+        filters: {
+          dispatchWarehouse: { documentId: docId },
+          orderStatus: { $notIn: ['cancelled', 'returned'] },
+        } as any,
+      });
+      if (activeOrder) {
+        const err: any = new Error(
+          'No se puede eliminar un almacén asociado a pedidos activos.',
+        );
+        err.status = 400;
+        throw err;
+      }
+
+      const pendingPo = await strapiRef.documents('api::purchase-order.purchase-order').findFirst({
+        filters: {
+          warehouse: { documentId: docId },
+          status: 'pending',
+        } as any,
+      });
+      if (pendingPo) {
+        const err: any = new Error(
+          'No se puede eliminar un almacén con órdenes de compra pendientes.',
+        );
+        err.status = 400;
+        throw err;
+      }
+    },
+  });
 
   return {
     ...crud,
@@ -35,7 +140,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
           }
         }
 
-        const result = await strapi.db.transaction(async (trx) => {
+        const result = await strapi.db.transaction(async ({ trx }) => {
           const dbQuery = (uid: string) => (strapi.db as any).query(uid);
           const buildIdWhere = (rawId: string | number) =>
             /^\d+$/.test(String(rawId).trim())
@@ -44,18 +149,24 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
 
           const sourceWh = await dbQuery('api::warehouse.warehouse').findOne({
             where: buildIdWhere(sourceWarehouseId),
-            select: ['id', 'documentId', 'name'],
+            select: ['id', 'documentId', 'name', 'isActive'],
             transacting: trx,
           });
 
           const targetWh = await dbQuery('api::warehouse.warehouse').findOne({
             where: buildIdWhere(targetWarehouseId),
-            select: ['id', 'documentId', 'name'],
+            select: ['id', 'documentId', 'name', 'isActive'],
             transacting: trx,
           });
 
           if (!sourceWh || !targetWh) {
             const err: any = new Error('El almacén de origen o destino no existe');
+            err.status = 400;
+            throw err;
+          }
+
+          if (sourceWh.isActive === false || targetWh.isActive === false) {
+            const err: any = new Error('No se pueden realizar transferencias desde o hacia un almacén inactivo');
             err.status = 400;
             throw err;
           }
@@ -140,7 +251,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
             }
           }
 
-          const transferCode = `TRF-${Math.floor(Date.now() / 1000)}`;
+          const transferCode = generateOperationCode('TRF');
           const nowIso = new Date().toISOString();
           const totalQuantity = Number(
             formattedItems
@@ -243,12 +354,18 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
 
           const wh = await dbQuery('api::warehouse.warehouse').findOne({
             where: buildIdWhere(warehouseId),
-            select: ['id', 'documentId', 'name'],
+            select: ['id', 'documentId', 'name', 'isActive'],
             transacting: trx,
           });
 
           if (!wh) {
             const err: any = new Error('El almacén seleccionado no existe');
+            err.status = 400;
+            throw err;
+          }
+
+          if (wh.isActive === false) {
+            const err: any = new Error('No se puede auditar un almacén inactivo');
             err.status = 400;
             throw err;
           }
@@ -273,6 +390,16 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
 
             if (!color) {
               const err: any = new Error(`Variante no encontrada (${rawColorId}).`);
+              err.status = 400;
+              throw err;
+            }
+
+            if (!color.product?.isWeighed && !Number.isInteger(counted)) {
+              const title = color.product?.title || 'Producto';
+              const colorName = color.name || 'N/A';
+              const err: any = new Error(
+                `El conteo para '${title} (${colorName})' debe ser un número entero.`,
+              );
               err.status = 400;
               throw err;
             }
@@ -327,7 +454,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
             };
           }
 
-          const auditCode = `AUD-${Math.floor(Date.now() / 1000)}`;
+          const auditCode = generateOperationCode('AUD');
           const auditReason = cleanNotes
             ? `Toma Física (${auditCode}): ${cleanNotes}`
             : `Toma Física de inventario (${auditCode})`;

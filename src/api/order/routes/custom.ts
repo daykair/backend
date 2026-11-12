@@ -126,6 +126,15 @@ export default {
     },
     {
       method: 'POST',
+      path: '/orders-public/:slug/payment-proof',
+      handler: 'api::order.order.uploadPublicPaymentProof',
+      config: {
+        auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'POST',
       path: '/orders-admin/batch-settle',
       handler: 'api::order.order.batchSettle',
       config: {

@@ -1,4 +1,19 @@
 import crypto from 'crypto';
+import { isSuperAdminRole, sanitizeUserOutput } from '../../../utils/adminCrud';
+
+const NON_STAFF_ROLE_TYPES = new Set(['client', 'cliente', 'customer', 'public', 'authenticated']);
+
+async function resolveRoleByIdentifier(strapi: any, roleRef: any) {
+  if (!roleRef) return null;
+  const raw = typeof roleRef === 'object' ? (roleRef.id || roleRef.documentId) : roleRef;
+  if (!raw) return null;
+  const str = String(raw).trim();
+  const where = /^\d+$/.test(str) ? { id: Number(str) } : { documentId: str };
+  return strapi.db.query('plugin::users-permissions.role').findOne({
+    where,
+    select: ['id', 'name', 'type'],
+  });
+}
 
 async function generateAndSendInvite(strapi: any, user: any, rawAdminUrl?: string, originHeader?: string) {
   const nonce = crypto.randomBytes(24).toString('hex');
@@ -13,7 +28,33 @@ async function generateAndSendInvite(strapi: any, user: any, rawAdminUrl?: strin
     .service('jwt')
     .issue({ id: user.id, purpose: 'set-password', nonce }, { expiresIn: '48h' });
 
-  const baseUrl = (rawAdminUrl || originHeader || process.env.ADMIN_URL || 'http://localhost:4321').replace(/\/$/, '');
+  const configuredAdminUrl = (process.env.ADMIN_URL || 'http://localhost:4321').replace(/\/$/, '');
+  const allowedAdminOrigins = new Set(
+    [
+      configuredAdminUrl,
+      ...(process.env.ADMIN_ALLOWED_ORIGINS || '')
+        .split(',')
+        .map((s) => s.trim().replace(/\/$/, ''))
+        .filter(Boolean),
+    ].map((u) => {
+      try {
+        return new URL(u).origin;
+      } catch {
+        return '';
+      }
+    }).filter(Boolean),
+  );
+  let baseUrl = configuredAdminUrl;
+  if (rawAdminUrl) {
+    try {
+      const parsed = new URL(String(rawAdminUrl));
+      if (allowedAdminOrigins.has(parsed.origin)) {
+        baseUrl = parsed.origin;
+      }
+    } catch {
+      // ignore invalid URL and keep server-configured ADMIN_URL
+    }
+  }
   const inviteUrl = `${baseUrl}/set-password?token=${encodeURIComponent(inviteToken)}`;
 
   let emailSent = false;
@@ -70,13 +111,10 @@ export default {
       });
 
       // Remove sensitive fields like password before sending
-      const sanitizedUsers = users.map((u: any) => {
-        const { password, resetPasswordToken, confirmationToken, ...safeUser } = u;
-        return {
-          ...safeUser,
-          pendingInvite: Boolean(resetPasswordToken),
-        };
-      });
+      const sanitizedUsers = users.map((u: any) => ({
+        ...sanitizeUserOutput(u),
+        pendingInvite: Boolean(u?.resetPasswordToken),
+      }));
 
       return ctx.send({ users: sanitizedUsers });
     } catch (err: any) {
@@ -92,6 +130,17 @@ export default {
     }
 
     try {
+      const targetRole = await resolveRoleByIdentifier(strapi, role);
+      if (!targetRole) {
+        return ctx.badRequest('El rol especificado no existe.');
+      }
+      if (NON_STAFF_ROLE_TYPES.has(String(targetRole.type || targetRole.name || '').toLowerCase())) {
+        return ctx.badRequest('No puedes asignar roles de cliente o públicos a usuarios administrativos.');
+      }
+      if (isSuperAdminRole(targetRole) && !isSuperAdminRole(ctx.state?.user?.role)) {
+        return ctx.forbidden('Solo un Super Administrador puede crear cuentas con rol Administrador.');
+      }
+
       // Check if user already exists
       const existingUser = await strapi.db.query('plugin::users-permissions.user').findOne({
         where: {
@@ -113,7 +162,7 @@ export default {
         username: username.trim(),
         email: email.toLowerCase().trim(),
         password: initialPassword,
-        role,
+        role: targetRole.id,
         confirmed: true,
         provider: 'local'
       });
@@ -126,7 +175,7 @@ export default {
       );
 
       // Remove sensitive info
-      const { password: _p, resetPasswordToken: _r, confirmationToken: _c, ...safeUser } = newUser;
+      const safeUser = sanitizeUserOutput(newUser);
 
       return ctx.send({
         message: emailSent
@@ -152,6 +201,10 @@ export default {
 
       if (!user) {
         return ctx.notFound('Usuario no encontrado.');
+      }
+
+      if (isSuperAdminRole(user.role) && !isSuperAdminRole(ctx.state?.user?.role)) {
+        return ctx.forbidden('Solo un Super Administrador puede enviar invitaciones para cuentas Administrador.');
       }
 
       const { inviteUrl, emailSent } = await generateAndSendInvite(
@@ -187,6 +240,13 @@ export default {
         return ctx.notFound('Usuario no encontrado.');
       }
 
+      const requesterIsSuperAdmin = isSuperAdminRole(ctx.state?.user?.role);
+      const isCurrentlyAdmin = isSuperAdminRole(user.role);
+
+      if (isCurrentlyAdmin && !requesterIsSuperAdmin) {
+        return ctx.forbidden('Solo un Super Administrador puede modificar cuentas Administrador.');
+      }
+
       const isSelf = requesterId && Number(id) === Number(requesterId);
       if (isSelf) {
         if (blocked === true) {
@@ -197,10 +257,24 @@ export default {
         }
       }
 
+      let resolvedRoleId: number | undefined;
+      if (role !== undefined && role !== null && role !== '') {
+        const nextRole = await resolveRoleByIdentifier(strapi, role);
+        if (!nextRole) {
+          return ctx.badRequest('El rol especificado no existe.');
+        }
+        if (NON_STAFF_ROLE_TYPES.has(String(nextRole.type || nextRole.name || '').toLowerCase())) {
+          return ctx.badRequest('No puedes asignar roles de cliente o públicos en la gestión de personal.');
+        }
+        if (isSuperAdminRole(nextRole) && !requesterIsSuperAdmin) {
+          return ctx.forbidden('Solo un Super Administrador puede asignar el rol Administrador.');
+        }
+        resolvedRoleId = nextRole.id;
+      }
+
       // Prevent blocking or demoting the last active admin
-      const isCurrentlyAdmin = (user.role?.type || '').toLowerCase() === 'admin';
       const isBeingBlocked = blocked === true && !user.blocked;
-      const isBeingDemoted = role && Number(role) !== Number(user.role?.id);
+      const isBeingDemoted = resolvedRoleId !== undefined && Number(resolvedRoleId) !== Number(user.role?.id);
 
       if (isCurrentlyAdmin && (isBeingBlocked || isBeingDemoted)) {
         const activeAdminsCount = await strapi.db.query('plugin::users-permissions.user').count({
@@ -219,7 +293,7 @@ export default {
       
       if (username) updateData.username = username;
       if (email) updateData.email = email.toLowerCase();
-      if (role) updateData.role = role;
+      if (resolvedRoleId !== undefined) updateData.role = resolvedRoleId;
       if (typeof blocked === 'boolean') updateData.blocked = blocked;
       if (password) updateData.password = password;
 
@@ -253,7 +327,7 @@ export default {
         }
       }
       
-      const { password: _p, ...safeUser } = updatedUser;
+      const { password: _p, resetPasswordToken: _rp, confirmationToken: _ct, ...safeUser } = updatedUser;
       
       return ctx.send({ message: 'Usuario actualizado exitosamente.', user: safeUser });
     } catch (err: any) {
@@ -278,8 +352,11 @@ export default {
         return ctx.notFound('Usuario no encontrado.');
       }
 
-      // Basic protection: prevent deleting the last admin user
-      if (user.role?.type?.toLowerCase() === 'admin') {
+      // Basic protection: only super-admin can delete admin users, and prevent deleting the last admin user
+      if (isSuperAdminRole(user.role)) {
+        if (!isSuperAdminRole(ctx.state?.user?.role)) {
+          return ctx.forbidden('Solo un Super Administrador puede eliminar cuentas Administrador.');
+        }
         const adminUsersCount = await strapi.db.query('plugin::users-permissions.user').count({
           where: { role: { type: 'admin' } }
         });
