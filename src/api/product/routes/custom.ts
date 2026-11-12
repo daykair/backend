@@ -29,6 +29,15 @@ export default {
         },
         {
             method: 'GET',
+            path: '/products-storefront/colors',
+            handler: 'api::product.product.findStorefrontColors',
+            config: {
+                auth: false,
+                policies: []
+            }
+        },
+        {
+            method: 'GET',
             path: '/products-admin',
             handler: 'api::product.product.findAdmin',
             config: {
@@ -101,6 +110,20 @@ export default {
                                 'api::company-setting.company-setting.update'
                             ]
                         }
+                    }
+                ]
+            }
+        },
+        {
+            method: 'PUT',
+            path: '/products-admin/:id',
+            handler: 'api::product.product.updateAdmin',
+            config: {
+                auth: false,
+                policies: [
+                    {
+                        name: 'global::is-admin',
+                        config: { permission: 'api::product.product.update' }
                     }
                 ]
             }

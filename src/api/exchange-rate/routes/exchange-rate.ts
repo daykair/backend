@@ -5,5 +5,7 @@ export default factories.createCoreRouter('api::exchange-rate.exchange-rate', {
     find: {
       auth: false,
     },
+    update: { policies: ['global::is-admin'] },
+    delete: { policies: ['global::is-admin'] },
   },
 });

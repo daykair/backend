@@ -4,6 +4,7 @@
 
 import { factories } from '@strapi/strapi';
 import { buildAdminFindParams } from '../../../utils/adminQuery';
+import { createAdminCrudHandlers } from '../../../utils/adminCrud';
 
 function slugifySpanish(value: string): string {
     return String(value || '')
@@ -194,7 +195,14 @@ async function deleteVariantWithStockCleanup(
     await strapi.documents('api::color.color').delete({ documentId: colorDocId });
 }
 
-export default factories.createCoreController('api::product.product', ({ strapi }) => ({
+export default factories.createCoreController('api::product.product', ({ strapi }) => {
+    const crud = createAdminCrudHandlers(strapi, 'api::product.product', {
+        defaultPopulate: ['categories', 'productImage'],
+    });
+
+    return {
+    updateAdmin: crud.updateAdmin,
+
     async findAdmin(ctx) {
         try {
             const params = buildAdminFindParams(ctx.query);
@@ -877,5 +885,37 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             console.error('[findStorefrontColorStock Error]:', err);
             return ctx.internalServerError(err?.message || 'Error al consultar stock de variante');
         }
+    },
+
+    /**
+     * Endpoint público para consultar la paleta de colores activos en el catálogo sin exponer campos privados.
+     */
+    async findStorefrontColors(ctx) {
+        try {
+            const colors: any[] = await strapi.documents('api::color.color').findMany({
+                populate: {
+                    colorImage: true,
+                    images: true
+                },
+                limit: 20000
+            });
+
+            return ctx.send({
+                data: colors.map((c) => ({
+                    id: c.id,
+                    documentId: c.documentId,
+                    name: c.name,
+                    code: c.code,
+                    discount: c.discount ?? 0,
+                    isDiscounted: Boolean(c.isDiscounted),
+                    colorImage: c.colorImage || null,
+                    images: c.images || null
+                }))
+            });
+        } catch (err: any) {
+            console.error('[findStorefrontColors Error]:', err);
+            return ctx.internalServerError(err?.message || 'Error al consultar colores');
+        }
     }
-}));
+    };
+});

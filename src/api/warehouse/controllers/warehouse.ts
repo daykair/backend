@@ -172,5 +172,196 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
         return ctx.internalServerError(error.message || 'Error interno al procesar la transferencia');
       }
     },
+
+    /**
+     * Registra una toma física de inventario comparando conteos reales vs stock actual del almacén
+     * y generando movimientos automáticos de ajuste (IN / OUT) dentro de una transacción.
+     */
+    async physicalAudit(ctx) {
+      try {
+        const body = ctx.request.body?.data || ctx.request.body || {};
+        const { warehouseId, notes, counts } = body;
+
+        if (!warehouseId || !Array.isArray(counts) || counts.length === 0) {
+          return ctx.badRequest('Debes indicar el almacén y al menos una variante contada.');
+        }
+
+        const sanitizedCounts = counts.map((entry: any) => ({
+          colorId: entry?.colorId,
+          countedStock: Number(entry?.countedStock),
+        }));
+
+        if (
+          sanitizedCounts.some(
+            (c) => !c.colorId || !Number.isFinite(c.countedStock) || c.countedStock < 0,
+          )
+        ) {
+          return ctx.badRequest('Cada variante contada debe tener un identificador válido y conteo >= 0.');
+        }
+
+        const performedBy = ctx.state?.user?.id || null;
+        const cleanNotes = String(notes || '').trim();
+        const buildIdWhere = (rawId: string | number) =>
+          !isNaN(Number(rawId)) && !String(rawId).includes('-')
+            ? { id: Number(rawId) }
+            : { documentId: String(rawId).trim() };
+
+        const result = await strapi.db.transaction(async ({ trx }) => {
+          const dbQuery = strapi.db.query as any;
+
+          const wh = await dbQuery('api::warehouse.warehouse').findOne({
+            where: buildIdWhere(warehouseId),
+            select: ['id', 'documentId', 'name'],
+            transacting: trx,
+          });
+
+          if (!wh) {
+            const err: any = new Error('El almacén seleccionado no existe');
+            err.status = 400;
+            throw err;
+          }
+
+          // Deduplicar conservando el último conteo por variante si el escáner envió duplicados
+          const latestByColor = new Map<string, number>();
+          for (const entry of sanitizedCounts) {
+            latestByColor.set(String(entry.colorId), Number(entry.countedStock.toFixed(3)));
+          }
+
+          const inItems: any[] = [];
+          const outItems: any[] = [];
+          const summaryAdjustments: any[] = [];
+
+          for (const [rawColorId, counted] of latestByColor.entries()) {
+            const color = await dbQuery('api::color.color').findOne({
+              where: buildIdWhere(rawColorId),
+              select: ['id', 'documentId', 'name'],
+              populate: ['product'],
+              transacting: trx,
+            });
+
+            if (!color) {
+              const err: any = new Error(`Variante no encontrada (${rawColorId}).`);
+              err.status = 400;
+              throw err;
+            }
+
+            const whStock = await dbQuery('api::warehouse-stock.warehouse-stock').findOne({
+              where: {
+                color: color.id,
+                warehouse: wh.id,
+              },
+              select: ['id', 'stock'],
+              transacting: trx,
+            });
+
+            const systemStock = Number(whStock?.stock || 0);
+            const delta = Number((counted - systemStock).toFixed(3));
+            if (Math.abs(delta) < 0.0001) {
+              continue;
+            }
+
+            const title = color.product?.title || 'Producto';
+            const colorName = color.name || 'N/A';
+            const movementItem = {
+              productId: color.product?.id || null,
+              colorId: color.documentId || color.id,
+              title,
+              colorName,
+              quantity: Math.abs(delta),
+            };
+
+            if (delta > 0) {
+              inItems.push(movementItem);
+            } else {
+              outItems.push(movementItem);
+            }
+
+            summaryAdjustments.push({
+              colorId: color.documentId || color.id,
+              productTitle: title,
+              colorName,
+              systemStock,
+              countedStock: counted,
+              delta,
+            });
+          }
+
+          if (inItems.length === 0 && outItems.length === 0) {
+            return {
+              auditCode: null,
+              warehouseName: wh.name,
+              adjustedCount: 0,
+              adjustments: [],
+            };
+          }
+
+          const auditCode = `AUD-${Math.floor(Date.now() / 1000)}`;
+          const auditReason = cleanNotes
+            ? `Toma Física (${auditCode}): ${cleanNotes}`
+            : `Toma Física de inventario (${auditCode})`;
+          const nowIso = new Date().toISOString();
+
+          let inMovementId: number | null = null;
+          let outMovementId: number | null = null;
+
+          if (inItems.length > 0) {
+            const inQty = inItems.reduce((acc, item) => acc + Number(item.quantity || 0), 0);
+            const inMov = await dbQuery('api::inventory-movement.inventory-movement').create({
+              data: {
+                type: 'IN',
+                reason: `${auditReason} [Sobrante]`,
+                items: inItems,
+                quantity: inQty,
+                date: nowIso,
+                warehouse: wh.id,
+                performedBy,
+              },
+              transacting: trx,
+            });
+            inMovementId = inMov.id;
+          }
+
+          if (outItems.length > 0) {
+            const outQty = outItems.reduce((acc, item) => acc + Number(item.quantity || 0), 0);
+            const outMov = await dbQuery('api::inventory-movement.inventory-movement').create({
+              data: {
+                type: 'OUT',
+                reason: `${auditReason} [Faltante]`,
+                items: outItems,
+                quantity: outQty,
+                date: nowIso,
+                warehouse: wh.id,
+                performedBy,
+              },
+              transacting: trx,
+            });
+            outMovementId = outMov.id;
+          }
+
+          return {
+            auditCode,
+            warehouseName: wh.name,
+            adjustedCount: summaryAdjustments.length,
+            inMovementId,
+            outMovementId,
+            adjustments: summaryAdjustments,
+          };
+        });
+
+        return ctx.send({
+          message:
+            result.adjustedCount > 0
+              ? `Auditoría aplicada (${result.adjustedCount} variantes ajustadas)`
+              : 'Auditoría completada sin diferencias de stock',
+          data: result,
+        });
+      } catch (error: any) {
+        if (error?.status === 400) {
+          return ctx.badRequest(error.message);
+        }
+        console.error('[Warehouse Physical Audit Error]:', error);
+        return ctx.internalServerError(error.message || 'Error interno al registrar la toma física');
+      }
+    },
   };
 });

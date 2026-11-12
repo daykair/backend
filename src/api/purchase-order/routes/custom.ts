@@ -1,5 +1,12 @@
+import { buildAdminRoutes } from '../../../utils/adminCrud';
+
 export default {
   routes: [
+    ...buildAdminRoutes('/purchase-orders-admin', 'api::purchase-order.purchase-order', [
+      'findOne',
+      'update',
+      'delete',
+    ]),
     {
       method: 'GET',
       path: '/purchase-orders-admin',

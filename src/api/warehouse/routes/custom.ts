@@ -22,5 +22,24 @@ export default {
         ],
       },
     },
+    {
+      method: 'POST',
+      path: '/warehouses-admin/physical-audit',
+      handler: 'api::warehouse.warehouse.physicalAudit',
+      config: {
+        auth: false,
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: {
+              permission: [
+                'api::warehouse.warehouse.find',
+                'api::inventory-movement.inventory-movement.create',
+              ],
+            },
+          },
+        ],
+      },
+    },
   ],
 };

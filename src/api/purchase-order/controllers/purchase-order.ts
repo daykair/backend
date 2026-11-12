@@ -1,7 +1,17 @@
 import { factories } from '@strapi/strapi';
 import { buildAdminFindParams } from '../../../utils/adminQuery';
+import { createAdminCrudHandlers } from '../../../utils/adminCrud';
 
-export default factories.createCoreController('api::purchase-order.purchase-order', ({ strapi }) => ({
+export default factories.createCoreController('api::purchase-order.purchase-order', ({ strapi }) => {
+    const crud = createAdminCrudHandlers(strapi, 'api::purchase-order.purchase-order', {
+        defaultPopulate: ['supplier', 'warehouse'],
+    });
+
+    return {
+    findOneAdmin: crud.findOneAdmin,
+    updateAdmin: crud.updateAdmin,
+    deleteAdmin: crud.deleteAdmin,
+
     async findAdmin(ctx) {
         try {
             const params = buildAdminFindParams(ctx.query);
@@ -157,4 +167,5 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
             }
         });
     }
-}));
+    };
+});
