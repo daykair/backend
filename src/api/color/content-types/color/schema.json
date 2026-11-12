@@ -71,6 +71,12 @@
       "relation": "oneToMany",
       "target": "api::warehouse-stock.warehouse-stock",
       "mappedBy": "color"
+    },
+    "sizes": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::size.size",
+      "mappedBy": "color"
     }
   }
 }

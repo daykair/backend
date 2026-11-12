@@ -149,8 +149,10 @@ function buildOrderMovementItems(items: any[], subtractReturned = false) {
       const sold = Number(item.quantity) || 0;
       const prevRet = subtractReturned ? Number(item.returnedQuantity) || 0 : 0;
       const qty = Math.max(0, Number((sold - prevRet).toFixed(3)));
+      const sizeId = item.size || normalizeIdentifier(item.sizeId) || null;
       return {
         colorId: item.color || normalizeIdentifier(item.colorId) || null,
+        ...(sizeId ? { sizeId, sizeName: item.sizeName || null } : {}),
         productId: item.product || normalizeIdentifier(item.productId) || null,
         title: item.productName || item.title || 'Producto',
         colorName: item.colorName || item.selectedColor || 'N/A',
@@ -309,8 +311,11 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             const colorIds = items
               .map((item: any) => normalizeIdentifier(item.colorId))
               .filter(Boolean);
+            const sizeIds = items
+              .map((item: any) => normalizeIdentifier(item.sizeId))
+              .filter(Boolean);
 
-            const [products, colors] = await Promise.all([
+            const [products, colors, sizes] = await Promise.all([
               productIds.length > 0
                 ? dbQuery('api::product.product').findMany({
                     where: buildOrFilters(productIds) || undefined,
@@ -323,6 +328,13 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                     where: buildOrFilters(colorIds) || undefined,
                     select: ['id', 'documentId', 'name'],
                     populate: ['images'],
+                    transacting: trx,
+                  })
+                : [],
+              sizeIds.length > 0
+                ? dbQuery('api::size.size').findMany({
+                    where: buildOrFilters(sizeIds) || undefined,
+                    select: ['id', 'documentId', 'name', 'costPrice'],
                     transacting: trx,
                   })
                 : [],
@@ -340,6 +352,12 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               if (color.documentId) colorMap.set(String(color.documentId), color);
             });
 
+            const sizeMap = new Map<string, any>();
+            sizes.forEach((size: any) => {
+              if (size.id !== undefined) sizeMap.set(String(size.id), size);
+              if (size.documentId) sizeMap.set(String(size.documentId), size);
+            });
+
             // Map existing items to preserve productImage if not sent in partial updates
             const existingItemImageMap = new Map<string, string>();
             if (Array.isArray(existingOrder?.orderItems)) {
@@ -352,6 +370,8 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             orderItems = items.map((item: any) => {
               const product = productMap.get(String(normalizeIdentifier(item.productId)));
               const color = colorMap.get(String(normalizeIdentifier(item.colorId)));
+              const rawSizeId = normalizeIdentifier(item.sizeId);
+              const size = rawSizeId ? sizeMap.get(String(rawSizeId)) : null;
               const quantity = Number(item.quantity) || 1;
 
               const colorFirstImg =
@@ -364,12 +384,19 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               return {
                 productName: item.productName || item.title || product?.title || 'Producto',
                 colorName: item.colorName || item.selectedColor || color?.name || 'N/A',
+                ...(size || item.sizeId
+                  ? {
+                      sizeId: size?.documentId || size?.id || item.sizeId,
+                      sizeName: item.sizeName || size?.name || '',
+                      size: size?.id ?? null,
+                    }
+                  : {}),
                 quantity,
                 unitPrice: Number(item.unitPrice ?? item.price ?? 0),
                 unitCost:
                   item.unitCost !== undefined && item.unitCost !== null
                     ? Number(item.unitCost)
-                    : Number(product?.costPrice || 0),
+                    : Number(size?.costPrice ?? product?.costPrice ?? 0),
                 product: product?.id ?? null,
                 color: color?.id ?? null,
                 productImage:
@@ -634,21 +661,28 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           transacting: trx,
         });
       } else if (shouldDeduct && existingSale && !existingReturn && Array.isArray(existingSale.items)) {
-        // Si el pedido ya descontó stock y fue editado, calculamos diferencias (deltas) por variante
+        // Si el pedido ya descontó stock y fue editado, calculamos diferencias (deltas) por variante+talla
+        const getItemVariantKey = (it: any) => {
+          const cid = String(it?.colorId || '');
+          if (!cid) return '';
+          const sid = it?.sizeId ? String(it.sizeId) : '';
+          return sid ? `${cid}::${sid}` : cid;
+        };
+
         const prevMap = new Map<string, { qty: number; item: any }>();
         existingSale.items.forEach((it: any) => {
-          const cid = String(it.colorId || '');
-          if (!cid) return;
-          const cur = prevMap.get(cid);
-          prevMap.set(cid, { qty: (cur?.qty || 0) + Number(it.quantity || 0), item: it });
+          const key = getItemVariantKey(it);
+          if (!key) return;
+          const cur = prevMap.get(key);
+          prevMap.set(key, { qty: (cur?.qty || 0) + Number(it.quantity || 0), item: it });
         });
 
         const nextMap = new Map<string, { qty: number; item: any }>();
         movementItems.forEach((it: any) => {
-          const cid = String(it.colorId || '');
-          if (!cid) return;
-          const cur = nextMap.get(cid);
-          nextMap.set(cid, { qty: (cur?.qty || 0) + Number(it.quantity || 0), item: it });
+          const key = getItemVariantKey(it);
+          if (!key) return;
+          const cur = nextMap.get(key);
+          nextMap.set(key, { qty: (cur?.qty || 0) + Number(it.quantity || 0), item: it });
         });
 
         const outDeltaItems: any[] = [];
@@ -806,14 +840,14 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         (strapi.documents('api::company-setting.company-setting' as any) as any).findFirst().catch(() => null),
         options.canViewProducts || options.canViewOrders
           ? strapi.documents('api::product.product').findMany({
-              populate: { colors: true },
+              populate: { colors: { populate: { sizes: true } } } as any,
               limit: 5000,
             })
           : Promise.resolve([]),
         resolvedWhDocId
           ? strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
               filters: { warehouse: { documentId: resolvedWhDocId } } as any,
-              populate: { color: { populate: { product: true } } },
+              populate: { color: { populate: { product: true } }, size: true } as any,
               limit: 10000,
             })
           : Promise.resolve([]),
@@ -851,9 +885,19 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         if (!resolvedWhDocId && options.canViewProducts) {
           const colors = Array.isArray(p.colors) ? p.colors : [];
           colors.forEach((c: any) => {
-            const st = Number(c.stock ?? 0);
-            inventoryValue += Math.max(0, st) * cost;
-            if (st <= lowStockThreshold) lowStockCount++;
+            const sizes = Array.isArray(c.sizes) ? c.sizes : [];
+            if (sizes.length > 0) {
+              sizes.forEach((sz: any) => {
+                const st = Number(sz.stock ?? 0);
+                const szCost = sz.costPrice != null ? Number(sz.costPrice) : cost;
+                inventoryValue += Math.max(0, st) * szCost;
+                if (st <= lowStockThreshold) lowStockCount++;
+              });
+            } else {
+              const st = Number(c.stock ?? 0);
+              inventoryValue += Math.max(0, st) * cost;
+              if (st <= lowStockThreshold) lowStockCount++;
+            }
           });
         }
       });
@@ -861,7 +905,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
       if (resolvedWhDocId && options.canViewProducts) {
         (warehouseStocks as any[]).forEach((ws: any) => {
           const st = Number(ws.stock ?? 0);
-          const pCost = Number(ws.color?.product?.costPrice || 0);
+          const pCost = Number(ws.size?.costPrice ?? ws.color?.product?.costPrice ?? 0);
           inventoryValue += Math.max(0, st) * pCost;
           if (st <= lowStockThreshold) lowStockCount++;
         });
@@ -1110,6 +1154,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           index?: number;
           productId?: string | number;
           colorId?: string | number;
+          sizeId?: string | number;
           quantity: number;
         }>;
         reason?: string;
@@ -1206,10 +1251,15 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           } else {
             targetIdx = orderItems.findIndex((oi: any) => {
               const oiColor = String(normalizeIdentifier(oi.color || oi.colorId) || '');
+              const oiSize = String(normalizeIdentifier(oi.size || oi.sizeId) || '');
               const oiProd = String(normalizeIdentifier(oi.product || oi.productId) || '');
               const reqColor = String(normalizeIdentifier(reqItem.colorId) || '');
+              const reqSize = String(normalizeIdentifier(reqItem.sizeId) || '');
               const reqProd = String(normalizeIdentifier(reqItem.productId) || '');
-              return reqColor ? oiColor === reqColor : reqProd && oiProd === reqProd;
+              if (reqColor) {
+                return oiColor === reqColor && (!reqSize || oiSize === reqSize);
+              }
+              return Boolean(reqProd && oiProd === reqProd);
             });
           }
 
@@ -1236,8 +1286,10 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           const unitPrice = Number(line.unitPrice ?? line.price ?? 0);
           computedCredit += unitPrice * retQty;
 
+          const lineSizeId = normalizeIdentifier(line.size || line.sizeId) || null;
           movementItems.push({
             colorId: normalizeIdentifier(line.color || line.colorId) || null,
+            ...(lineSizeId ? { sizeId: lineSizeId, sizeName: line.sizeName || null } : {}),
             productId: normalizeIdentifier(line.product || line.productId) || null,
             title: line.productName || line.title || 'Producto',
             colorName: line.colorName || line.selectedColor || 'N/A',
@@ -1536,7 +1588,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
 
       const dbProducts: any[] = await strapi.db.query('api::product.product').findMany({
         where: { $or: productOr },
-        populate: { colors: true, categories: true },
+        populate: { colors: { populate: ['sizes'] }, categories: true },
       });
 
       const productByKey = new Map<string, any>();
@@ -1545,7 +1597,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         if (p.documentId) productByKey.set(String(p.documentId), p);
       }
 
-      const warehouseStockMap = new Map<number, number>();
+      const warehouseStockMap = new Map<string, number>();
       if (resolvedWarehouse) {
         const allColorNumericIds: number[] = [];
         for (const p of dbProducts) {
@@ -1559,17 +1611,21 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               warehouse: resolvedWarehouse.id,
               color: { $in: allColorNumericIds },
             },
-            populate: ['color'],
+            populate: ['color', 'size'],
           });
           for (const ws of whStocks) {
             const cId = Number(ws.color?.id || ws.color);
-            if (cId) warehouseStockMap.set(cId, Number(ws.stock || 0));
+            const sId = ws.size ? Number(ws.size?.id || ws.size) : null;
+            if (cId) {
+              const wsKey = `${cId}::${sId || 'BASE'}`;
+              warehouseStockMap.set(wsKey, Number(ws.stock || 0));
+            }
           }
         }
       }
 
       const verifiedItems: any[] = [];
-      const requestedQtyByColor = new Map<number, { qty: number; available: number; label: string }>();
+      const requestedQtyByVariant = new Map<string, { qty: number; available: number; label: string }>();
 
       for (const rawItem of items) {
         const pKey = String(rawItem.productId || rawItem.id || '').trim();
@@ -1592,6 +1648,24 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           throw err;
         }
 
+        const sKey = String(rawItem.sizeId || '').trim();
+        const colorSizes = Array.isArray(matchedColor.sizes) ? matchedColor.sizes : [];
+        let matchedSize: any = null;
+        if (sKey) {
+          matchedSize = colorSizes.find(
+            (sz: any) => String(sz.documentId) === sKey || String(sz.id) === sKey,
+          );
+          if (!matchedSize) {
+            const err: any = new Error(`Talla no encontrada para ${product.title} (${matchedColor.name || 'Único'})`);
+            err.status = 400;
+            throw err;
+          }
+        } else if (colorSizes.length > 0) {
+          const err: any = new Error(`Debes seleccionar una talla para ${product.title} (${matchedColor.name || 'Único'})`);
+          err.status = 400;
+          throw err;
+        }
+
         const quantity = Number(rawItem.quantity);
         if (!Number.isFinite(quantity) || quantity < 0.01) {
           const err: any = new Error(`Cantidad inválida para ${product.title}`);
@@ -1599,33 +1673,37 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           throw err;
         }
 
+        const variantKey = `${Number(matchedColor.id)}::${matchedSize ? Number(matchedSize.id) : 'BASE'}`;
         const availableStock = resolvedWarehouse
-          ? Number(warehouseStockMap.get(Number(matchedColor.id)) ?? 0)
-          : Number(matchedColor.stock ?? 0);
+          ? Number(warehouseStockMap.get(variantKey) ?? 0)
+          : Number((matchedSize ? matchedSize.stock : matchedColor.stock) ?? 0);
 
-        const prevEntry = requestedQtyByColor.get(Number(matchedColor.id));
+        const variantLabel = `${product.title} (${matchedColor.name || 'Único'}${matchedSize ? ` · ${matchedSize.name}` : ''})`;
+        const prevEntry = requestedQtyByVariant.get(variantKey);
         const cumulativeQty = Number(((prevEntry?.qty || 0) + quantity).toFixed(4));
-        requestedQtyByColor.set(Number(matchedColor.id), {
+        requestedQtyByVariant.set(variantKey, {
           qty: cumulativeQty,
           available: availableStock,
-          label: `${product.title} (${matchedColor.name || 'Único'})`,
+          label: variantLabel,
         });
 
         if (cumulativeQty > availableStock) {
           const err: any = new Error(
-            `Stock insuficiente para ${product.title} (${matchedColor.name || 'Único'}). Disponible: ${availableStock}`,
+            `Stock insuficiente para ${variantLabel}. Disponible: ${availableStock}`,
           );
           err.status = 400;
           throw err;
         }
 
-        const discountPct = publicUtils.calculateEffectiveDiscountPct(product, matchedColor);
-        const unitPrice = Number((Number(product.price || 0) * (1 - discountPct / 100)).toFixed(2));
-        const unitCost = Number(product.costPrice || 0);
+        const basePrice = publicUtils.getEffectiveVariantPrice(product, matchedSize, 'detal');
+        const discountPct = publicUtils.calculateEffectiveDiscountPct(product, matchedColor, matchedSize);
+        const unitPrice = Number((basePrice * (1 - discountPct / 100)).toFixed(2));
+        const unitCost = Number((matchedSize?.costPrice ?? product.costPrice) || 0);
 
         verifiedItems.push({
           productId: product.id,
           colorId: matchedColor.documentId || matchedColor.id,
+          ...(matchedSize ? { sizeId: matchedSize.documentId || matchedSize.id, sizeName: matchedSize.name } : {}),
           quantity,
           unitPrice,
           unitCost,

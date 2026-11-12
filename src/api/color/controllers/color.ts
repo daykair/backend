@@ -7,7 +7,8 @@ import { createAdminCrudHandlers, resolveEntityDocumentId } from '../../../utils
 
 export default factories.createCoreController('api::color.color', ({ strapi }) => {
     const crud = createAdminCrudHandlers(strapi, 'api::color.color', {
-        defaultPopulate: ['images', 'colorImage', 'product', 'warehouse_stocks'],
+        defaultPopulate: ['images', 'colorImage', 'product', 'sizes', 'warehouse_stocks'],
+        allowedPopulateKeys: ['images', 'colorImage', 'product', 'sizes', 'warehouse_stocks'],
     });
 
     return {
@@ -29,6 +30,18 @@ export default factories.createCoreController('api::color.color', ({ strapi }) =
                         .documents('api::warehouse-stock.warehouse-stock')
                         .delete({ documentId: ws.documentId })
                         .catch((err) => console.error('[color.deleteAdmin] Error cleaning warehouse-stock:', err));
+                }
+            }
+
+            const sizes: any[] = await (strapi.documents('api::size.size' as any) as any).findMany({
+                filters: { color: { documentId: docId } },
+                limit: 500,
+            });
+            for (const sz of sizes) {
+                if (sz?.documentId) {
+                    await (strapi.documents('api::size.size' as any) as any)
+                        .delete({ documentId: sz.documentId })
+                        .catch((err: any) => console.error('[color.deleteAdmin] Error cleaning size:', err));
                 }
             }
 

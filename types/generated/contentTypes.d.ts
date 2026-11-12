@@ -502,10 +502,11 @@ export interface ApiCashRegisterCashRegister
     description: 'Daily cash register closings';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     date: Schema.Attribute.Date & Schema.Attribute.Required;
+    openingBalance: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
     totalIncome: Schema.Attribute.Decimal & Schema.Attribute.Required;
     totalExpenses: Schema.Attribute.Decimal & Schema.Attribute.Required;
     expectedBalance: Schema.Attribute.Decimal & Schema.Attribute.Required;
@@ -513,6 +514,14 @@ export interface ApiCashRegisterCashRegister
     difference: Schema.Attribute.Decimal & Schema.Attribute.Required;
     notes: Schema.Attribute.Text;
     breakdown: Schema.Attribute.JSON;
+    performedBy: Schema.Attribute.Relation<
+      'manyToOne',
+      'plugin::users-permissions.user'
+    >;
+    warehouse: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::warehouse.warehouse'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -598,6 +607,7 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       'oneToMany',
       'api::warehouse-stock.warehouse-stock'
     >;
+    sizes: Schema.Attribute.Relation<'oneToMany', 'api::size.size'>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -607,6 +617,50 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     locale: Schema.Attribute.String;
     localizations: Schema.Attribute.Relation<'oneToMany', 'api::color.color'>;
+  };
+}
+
+export interface ApiCompanySettingCompanySetting
+  extends Struct.SingleTypeSchema {
+  collectionName: 'company_settings';
+  info: {
+    singularName: 'company-setting';
+    pluralName: 'company-settings';
+    displayName: 'Configuraci\u00F3n de Empresa';
+    description: 'Datos fiscales, logo e identidad corporativa de la empresa';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    commercialName: Schema.Attribute.String;
+    businessName: Schema.Attribute.String;
+    rif: Schema.Attribute.String;
+    logoIncludesTaxInfo: Schema.Attribute.Boolean &
+      Schema.Attribute.DefaultTo<false>;
+    logo: Schema.Attribute.Media<'images'>;
+    favicon: Schema.Attribute.Media<'images'>;
+    phone: Schema.Attribute.String;
+    email: Schema.Attribute.String;
+    address: Schema.Attribute.Text;
+    instagram: Schema.Attribute.String;
+    receiptFooterNote: Schema.Attribute.Text;
+    paymentSettings: Schema.Attribute.JSON;
+    bannerSettings: Schema.Attribute.JSON;
+    logisticsSettings: Schema.Attribute.JSON;
+    operationalSettings: Schema.Attribute.JSON;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::company-setting.company-setting'
+    >;
   };
 }
 
@@ -691,6 +745,7 @@ export interface ApiInventoryMovementInventoryMovement
   };
   attributes: {
     color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
+    size: Schema.Attribute.Relation<'manyToOne', 'api::size.size'>;
     quantity: Schema.Attribute.Decimal;
     type: Schema.Attribute.Enumeration<['IN', 'OUT']> &
       Schema.Attribute.Required;
@@ -753,6 +808,7 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     > &
       Schema.Attribute.Private;
     paymentReference: Schema.Attribute.String;
+    trackingNumber: Schema.Attribute.String;
     orderType: Schema.Attribute.String & Schema.Attribute.DefaultTo<'regular'>;
     amountPaid: Schema.Attribute.Decimal;
     performedBy: Schema.Attribute.Relation<
@@ -765,6 +821,8 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     >;
     exchangeRate: Schema.Attribute.Decimal;
     shippingCost: Schema.Attribute.Decimal;
+    discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
+    notes: Schema.Attribute.Text;
     dispatchWarehouse: Schema.Attribute.Relation<
       'manyToOne',
       'api::warehouse.warehouse'
@@ -861,6 +919,10 @@ export interface ApiPurchaseOrderPurchaseOrder
     reference: Schema.Attribute.String;
     items: Schema.Attribute.JSON & Schema.Attribute.Required;
     payments: Schema.Attribute.JSON;
+    warehouse: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::warehouse.warehouse'
+    >;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -915,6 +977,50 @@ export interface ApiRefreshTokenRefreshToken
       'oneToMany',
       'api::refresh-token.refresh-token'
     >;
+  };
+}
+
+export interface ApiSizeSize extends Struct.CollectionTypeSchema {
+  collectionName: 'sizes';
+  info: {
+    singularName: 'size';
+    pluralName: 'sizes';
+    displayName: 'Size';
+    description: 'Tallas opcionales por variante de color con stock y precio opcionales';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    name: Schema.Attribute.String & Schema.Attribute.Required;
+    sku: Schema.Attribute.String;
+    sortOrder: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<0>;
+    stock: Schema.Attribute.Decimal &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<0>;
+    price: Schema.Attribute.Decimal;
+    wholesalePrice: Schema.Attribute.Decimal;
+    costPrice: Schema.Attribute.Decimal & Schema.Attribute.Private;
+    isDiscounted: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    discount: Schema.Attribute.Decimal & Schema.Attribute.DefaultTo<0>;
+    color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
+    warehouse_stocks: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::warehouse-stock.warehouse-stock'
+    >;
+    inventory_movements: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::inventory-movement.inventory-movement'
+    >;
+    createdAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    publishedAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String;
+    localizations: Schema.Attribute.Relation<'oneToMany', 'api::size.size'>;
   };
 }
 
@@ -1013,6 +1119,7 @@ export interface ApiWarehouseStockWarehouseStock
       'api::warehouse.warehouse'
     >;
     color: Schema.Attribute.Relation<'manyToOne', 'api::color.color'>;
+    size: Schema.Attribute.Relation<'manyToOne', 'api::size.size'>;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;
@@ -1406,6 +1513,7 @@ declare module '@strapi/strapi' {
       'api::cash-register.cash-register': ApiCashRegisterCashRegister;
       'api::category.category': ApiCategoryCategory;
       'api::color.color': ApiColorColor;
+      'api::company-setting.company-setting': ApiCompanySettingCompanySetting;
       'api::exchange-rate.exchange-rate': ApiExchangeRateExchangeRate;
       'api::expense.expense': ApiExpenseExpense;
       'api::inventory-movement.inventory-movement': ApiInventoryMovementInventoryMovement;
@@ -1413,6 +1521,7 @@ declare module '@strapi/strapi' {
       'api::product.product': ApiProductProduct;
       'api::purchase-order.purchase-order': ApiPurchaseOrderPurchaseOrder;
       'api::refresh-token.refresh-token': ApiRefreshTokenRefreshToken;
+      'api::size.size': ApiSizeSize;
       'api::supplier.supplier': ApiSupplierSupplier;
       'api::warehouse.warehouse': ApiWarehouseWarehouse;
       'api::warehouse-stock.warehouse-stock': ApiWarehouseStockWarehouseStock;

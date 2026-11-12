@@ -28,6 +28,12 @@
       "relation": "manyToOne",
       "target": "api::color.color",
       "inversedBy": "warehouse_stocks"
+    },
+    "size": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::size.size",
+      "inversedBy": "warehouse_stocks"
     }
   }
 }

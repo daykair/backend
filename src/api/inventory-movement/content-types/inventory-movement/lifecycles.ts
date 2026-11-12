@@ -87,9 +87,28 @@ export default {
       }
 
       const rawColor = result.color || event.params.data?.color;
+      const rawSize = result.size || event.params.data?.size;
       const batchItems = result.items || event.params.data?.items;
 
-      // Aux para recalcular el stock total agregado de un Color dentro de la misma transacción
+      // Aux para recalcular el stock total agregado de un Color (y sus Tallas tocadas) dentro de la transacción
+      const syncSizeStock = async (effectiveSizeDocId: string) => {
+        const sizeStocks = (await strapi.db
+          .query('api::warehouse-stock.warehouse-stock')
+          .findMany({
+            where: { size: { documentId: effectiveSizeDocId } },
+            select: ['stock'],
+          })) as any[];
+
+        const totalSizeStock = Number(
+          sizeStocks.reduce((sum, s) => sum + Number(s.stock || 0), 0).toFixed(3),
+        );
+
+        await strapi.db.query('api::size.size' as any).updateMany({
+          where: { documentId: effectiveSizeDocId },
+          data: { stock: totalSizeStock },
+        });
+      };
+
       const syncAggregateStock = async (effectiveColorDocId: string) => {
         const allWarehouseStocks = (await strapi.db
           .query('api::warehouse-stock.warehouse-stock')
@@ -114,21 +133,46 @@ export default {
         qtyRaw: unknown,
         labelTitle?: string,
         labelColor?: string,
+        effectiveSizeDocId?: string | null,
+        labelSize?: string,
       ) => {
         const qtyToChange = roundQty(qtyRaw);
         if (!Number.isFinite(qtyToChange) || qtyToChange <= 0) {
           throw new Error('[Inventory Lifecycle] La cantidad de movimiento debe ser un número positivo.');
         }
 
-        let warehouseStockRecord = (await strapi.db
+        if (effectiveSizeDocId) {
+          const sizeEntity = (await strapi.db.query('api::size.size' as any).findOne({
+            where: { documentId: effectiveSizeDocId },
+            populate: ['color'],
+          })) as any;
+          if (!sizeEntity) {
+            throw new Error(`[Inventory Lifecycle] La talla seleccionada (${effectiveSizeDocId}) ya no existe.`);
+          }
+          if (sizeEntity.color?.documentId && sizeEntity.color.documentId !== effectiveColorDocId) {
+            throw new Error('[Inventory Lifecycle] La talla seleccionada no pertenece al color indicado.');
+          }
+          if (!labelSize && sizeEntity.name) {
+            labelSize = sizeEntity.name;
+          }
+        }
+
+        const candidateRecords = (await strapi.db
           .query('api::warehouse-stock.warehouse-stock')
-          .findOne({
+          .findMany({
             where: {
               color: { documentId: effectiveColorDocId },
               warehouse: { documentId: warehouseDocId },
             },
+            populate: ['size'],
             select: ['id', 'documentId', 'stock'],
-          })) as any;
+          })) as any[];
+
+        let warehouseStockRecord = candidateRecords.find((ws: any) =>
+          effectiveSizeDocId
+            ? ws?.size?.documentId === effectiveSizeDocId
+            : !ws?.size,
+        );
 
         if (!warehouseStockRecord) {
           if (movementType === 'OUT') {
@@ -138,7 +182,8 @@ export default {
             })) as any;
             const titleString = labelTitle || colorEntity?.product?.title || 'Producto';
             const rawColorName = labelColor || colorEntity?.name || '';
-            const nameString = rawColorName ? ` (${rawColorName})` : '';
+            const variantParts = [rawColorName, labelSize].filter(Boolean).join(' · ');
+            const nameString = variantParts ? ` (${variantParts})` : '';
             throw new Error(
               `Stock insuficiente en almacén para el ítem '${titleString}${nameString}'. Solicitado: ${qtyToChange}, Disponible: 0`,
             );
@@ -148,8 +193,9 @@ export default {
             data: {
               stock: 0,
               color: effectiveColorDocId,
+              ...(effectiveSizeDocId ? { size: effectiveSizeDocId } : {}),
               warehouse: warehouseDocId,
-            },
+            } as any,
             status: 'published',
           });
         }
@@ -186,7 +232,8 @@ export default {
             titleString = labelTitle || colorEntity?.product?.title || 'Producto';
             rawColorName = labelColor || colorEntity?.name || '';
           }
-          const nameString = rawColorName ? ` (${rawColorName})` : '';
+          const variantParts = [rawColorName, labelSize].filter(Boolean).join(' · ');
+          const nameString = variantParts ? ` (${variantParts})` : '';
           throw new Error(
             `Stock insuficiente en almacén para el ítem '${titleString}${nameString}'. Solicitado: ${qtyToChange}, Disponible: ${available}`,
           );
@@ -197,6 +244,7 @@ export default {
       if (batchItems && Array.isArray(batchItems)) {
         console.log(`[Inventory Lifecycle] Procesando LOTE de ${batchItems.length} items en almacén ${warehouseDocId}`);
         const updatedColors = new Set<string>();
+        const updatedSizes = new Set<string>();
 
         for (const item of batchItems) {
           if (!item?.colorId || item?.quantity === undefined) {
@@ -208,15 +256,27 @@ export default {
             throw new Error('[Inventory Lifecycle] No se pudo resolver la variante del ítem en el movimiento.');
           }
 
+          const effectiveSizeDocId = item.sizeId
+            ? await extractRelationDocId(item.sizeId, 'api::size.size')
+            : null;
+
           await applyAtomicWarehouseStockChange(
             effectiveDocId,
             item.quantity,
             item.title,
             item.colorName,
+            effectiveSizeDocId,
+            item.sizeName,
           );
           updatedColors.add(effectiveDocId);
+          if (effectiveSizeDocId) {
+            updatedSizes.add(effectiveSizeDocId);
+          }
         }
 
+        for (const sizeDocId of updatedSizes) {
+          await syncSizeStock(sizeDocId);
+        }
         for (const colorDocId of updatedColors) {
           await syncAggregateStock(colorDocId);
         }
@@ -232,10 +292,23 @@ export default {
         return;
       }
 
+      const effectiveSizeDocId = rawSize
+        ? await extractRelationDocId(rawSize, 'api::size.size')
+        : null;
+
       console.log(
-        `[Inventory Lifecycle] Procesando movimiento individual en almacén ${warehouseDocId} para variante: ${effectiveColorDocId}`,
+        `[Inventory Lifecycle] Procesando movimiento individual en almacén ${warehouseDocId} para variante: ${effectiveColorDocId}${effectiveSizeDocId ? ` (talla ${effectiveSizeDocId})` : ''}`,
       );
-      await applyAtomicWarehouseStockChange(effectiveColorDocId, result.quantity);
+      await applyAtomicWarehouseStockChange(
+        effectiveColorDocId,
+        result.quantity,
+        undefined,
+        undefined,
+        effectiveSizeDocId,
+      );
+      if (effectiveSizeDocId) {
+        await syncSizeStock(effectiveSizeDocId);
+      }
       await syncAggregateStock(effectiveColorDocId);
     });
   },

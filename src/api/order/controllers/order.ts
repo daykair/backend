@@ -27,6 +27,8 @@ async function resolveCustomerUser(strapi: any, ctx: any) {
 const orderLineItemSchema = yup.object({
   productId: yup.mixed().required(),
   colorId: yup.mixed().nullable().optional(),
+  sizeId: yup.mixed().nullable().optional(),
+  sizeName: yup.string().nullable().optional(),
   quantity: yup.number().required().min(0.01),
   unitPrice: yup.number().required().min(0),
   unitCost: yup.number().optional().min(0),

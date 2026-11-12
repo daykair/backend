@@ -18,6 +18,12 @@
       "target": "api::color.color",
       "inversedBy": "inventory_movements"
     },
+    "size": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::size.size",
+      "inversedBy": "inventory_movements"
+    },
     "quantity": {
       "type": "decimal",
       "required": false

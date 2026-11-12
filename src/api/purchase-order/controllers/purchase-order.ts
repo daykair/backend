@@ -174,6 +174,26 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
                             throw missingErr;
                         }
 
+                        const sizeDocId = adj.sizeId
+                            ? await resolveEntityDocumentId(strapi, 'api::size.size', adj.sizeId)
+                            : null;
+                        let sizeEntity: any = null;
+                        if (adj.sizeId) {
+                            sizeEntity = sizeDocId
+                                ? await (strapi.documents('api::size.size' as any) as any).findOne({
+                                      documentId: sizeDocId,
+                                      populate: ['color'],
+                                  })
+                                : null;
+                            if (!sizeEntity || (sizeEntity.color?.documentId && sizeEntity.color.documentId !== colorEntity.documentId)) {
+                                const missingSizeErr: any = new Error(
+                                    `Talla con ID ${adj.sizeId} no encontrada para ${colorEntity.name}.`,
+                                );
+                                missingSizeErr.status = 400;
+                                throw missingSizeErr;
+                            }
+                        }
+
                         const targetWarehouseDocId =
                             (adj.warehouseId
                                 ? await resolveEntityDocumentId(strapi, 'api::warehouse.warehouse', adj.warehouseId)
@@ -181,18 +201,21 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
 
                         const productTitle = colorEntity.product?.title || 'Producto';
                         const colorName = colorEntity.name || 'N/A';
+                        const sizeName = sizeEntity?.name || adj.sizeName || '';
                         const orderIdentifier = savedOrder.reference || savedOrder.id || savedOrder.documentId;
 
                         let baseReason = adj.reason || 'Ajuste de Inventario';
                         baseReason = baseReason.replace('{order_id}', orderIdentifier);
                         baseReason = baseReason.replace('#undefined', `#${orderIdentifier}`);
 
-                        const enrichedReason = `${baseReason} - Item: ${productTitle} (${colorName})`;
+                        const variantDesc = sizeName ? `${colorName} · ${sizeName}` : colorName;
+                        const enrichedReason = `${baseReason} - Item: ${productTitle} (${variantDesc})`;
 
                         // A. Crear Movimiento de Inventario
                         await strapi.documents('api::inventory-movement.inventory-movement').create({
                             data: {
                                 color: colorEntity.documentId,
+                                ...(sizeEntity ? { size: sizeEntity.documentId } : {}),
                                 product: colorEntity.product?.documentId || null,
                                 ...(targetWarehouseDocId ? { warehouse: targetWarehouseDocId } : {}),
                                 quantity: Number(adjQty.toFixed(3)),
@@ -201,26 +224,32 @@ export default factories.createCoreController('api::purchase-order.purchase-orde
                                 date: getStandardISO(),
                                 performedBy: performedById || adj.userId || null,
                                 exchangeRate: adj.exchangeRate,
-                            },
+                            } as any,
                             status: 'published',
                         });
 
-                        // B. Actualizar Costo del Producto solo cuando entra stock positivo
+                        // B. Actualizar Costo cuando entra stock positivo
                         if (adjType === 'IN') {
                             const itemData = parsedItems.find(
                                 (i: any) =>
-                                    i.colorId === colorEntity.documentId ||
-                                    i.colorId === adj.colorId ||
-                                    i.productId === colorEntity.product?.documentId,
-                            );
+                                    (i.colorId === colorEntity.documentId || i.colorId === adj.colorId) &&
+                                    (!sizeEntity || !i.sizeId || i.sizeId === sizeEntity.documentId || i.sizeId === adj.sizeId),
+                            ) || parsedItems.find((i: any) => i.productId === colorEntity.product?.documentId);
                             const unitCost = Number(itemData?.unitCost);
-                            if (Number.isFinite(unitCost) && unitCost > 0 && colorEntity.product?.documentId) {
-                                await strapi.db.query('api::product.product').updateMany({
-                                    where: { documentId: colorEntity.product.documentId },
-                                    data: {
-                                        costPrice: Number(unitCost.toFixed(4)),
-                                    },
-                                });
+                            if (Number.isFinite(unitCost) && unitCost > 0) {
+                                if (sizeEntity && sizeEntity.price !== null && sizeEntity.price !== undefined) {
+                                    await strapi.db.query('api::size.size' as any).updateMany({
+                                        where: { documentId: sizeEntity.documentId },
+                                        data: { costPrice: Number(unitCost.toFixed(4)) },
+                                    });
+                                } else if (colorEntity.product?.documentId) {
+                                    await strapi.db.query('api::product.product').updateMany({
+                                        where: { documentId: colorEntity.product.documentId },
+                                        data: {
+                                            costPrice: Number(unitCost.toFixed(4)),
+                                        },
+                                    });
+                                }
                             }
                         }
                     }

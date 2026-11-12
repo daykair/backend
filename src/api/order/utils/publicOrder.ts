@@ -35,21 +35,53 @@ export function isPayablePublicStatus(status: unknown): boolean {
 }
 
 /**
- * Calcula el porcentaje máximo de descuento aplicable desde producto, variante y categorías.
+ * Resuelve el precio unitario base (detal o mayor) considerando sobreescritura opcional por talla.
  */
-export function calculateEffectiveDiscountPct(product: any, color?: any): number {
+export function getEffectiveVariantPrice(
+  product: any,
+  size?: any,
+  priceType: 'detal' | 'mayor' = 'detal',
+): number {
+  if (priceType === 'mayor') {
+    const sizeWholesale = size?.wholesalePrice;
+    if (sizeWholesale !== undefined && sizeWholesale !== null && sizeWholesale !== '') {
+      const parsed = Number(sizeWholesale);
+      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    }
+    return Number(product?.wholesalePrice || 0);
+  }
+
+  const sizePrice = size?.price;
+  if (sizePrice !== undefined && sizePrice !== null && sizePrice !== '') {
+    const parsed = Number(sizePrice);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return Number(product?.price || 0);
+}
+
+/**
+ * Calcula el porcentaje máximo de descuento aplicable desde producto, color, talla y categorías.
+ */
+export function calculateEffectiveDiscountPct(product: any, color?: any, size?: any): number {
   const prodDiscount =
     product?.isDiscounted === false
       ? 0
       : Math.min(100, Math.max(0, Number(product?.discount || 0)));
-  const colorDiscount = Math.min(100, Math.max(0, Number(color?.discount || 0)));
+  const colorDiscount =
+    color?.isDiscounted === false
+      ? 0
+      : Math.min(100, Math.max(0, Number(color?.discount || 0)));
+  const sizeDiscount =
+    size?.isDiscounted === false
+      ? 0
+      : Math.min(100, Math.max(0, Number(size?.discount || 0)));
   const catDiscounts = Array.isArray(product?.categories)
     ? product.categories.map((cat: any) =>
         Math.min(100, Math.max(0, Number(cat?.discount ?? cat?.Discount ?? 0))),
       )
     : [];
 
-  return Math.max(prodDiscount, colorDiscount, ...catDiscounts, 0);
+  return Math.max(prodDiscount, colorDiscount, sizeDiscount, ...catDiscounts, 0);
 }
 
 /**
@@ -62,6 +94,8 @@ export function sanitizePublicOrder(order: any, options?: { includeCustomerPii?:
   const orderItems = rawItems.map((item: any) => ({
     productId: item.productId,
     colorId: item.colorId,
+    sizeId: item.sizeId || null,
+    sizeName: item.sizeName || '',
     quantity: Number(item.quantity || 0),
     returnedQuantity: Number(item.returnedQuantity || 0),
     unitPrice: Number(item.unitPrice || 0),

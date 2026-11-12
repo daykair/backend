@@ -65,6 +65,7 @@ export default {
 
       // Migrar existencias globales de variantes de productos a este almacén
       const colors = await strapi.documents('api::color.color').findMany({
+        populate: ['sizes'],
         limit: -1
       });
 
@@ -81,6 +82,9 @@ export default {
 
       let migrationCount = 0;
       for (const color of colors) {
+        if (Array.isArray((color as any).sizes) && (color as any).sizes.length > 0) {
+          continue;
+        }
         const colorKey = `${color.documentId || color.id}_${defaultWarehouse.documentId || defaultWarehouse.id}`;
         if (!existingSet.has(colorKey)) {
           const initialStock = Number(color.stock || 0);

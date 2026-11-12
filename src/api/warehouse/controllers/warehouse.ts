@@ -177,10 +177,10 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
             throw err;
           }
 
-          // Resolver variantes y validar stock acumulado en almacén origen antes de registrar movimientos
-          const requestedByColor = new Map<
-            number,
-            { color: any; qty: number; label: string }
+          // Resolver variantes (y tallas opcionales) y validar stock acumulado en almacén origen
+          const requestedByVariant = new Map<
+            string,
+            { colorId: number; sizeId: number | null; qty: number; label: string }
           >();
           const formattedItems: any[] = [];
 
@@ -188,7 +188,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
             const color = await dbQuery('api::color.color').findOne({
               where: buildIdWhere(item.colorId),
               select: ['id', 'documentId', 'name', 'code'],
-              populate: ['product'],
+              populate: ['product', 'sizes'],
               transacting: trx,
             });
 
@@ -200,47 +200,87 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
               throw err;
             }
 
-            const qty = Number(Number(item.quantity).toFixed(3));
-            const title = item.title || item.productName || color.product?.title || 'Producto';
-            const colorName = item.selectedColor || item.colorName || color.name || 'N/A';
+            const colorSizes = Array.isArray(color.sizes) ? color.sizes : [];
+            let matchedSize: any = null;
 
-            if (!color.product?.isWeighed && !Number.isInteger(qty)) {
+            if (item.sizeId) {
+              matchedSize = await dbQuery('api::size.size').findOne({
+                where: buildIdWhere(item.sizeId),
+                select: ['id', 'documentId', 'name', 'sku', 'costPrice'],
+                populate: ['color'],
+                transacting: trx,
+              });
+              if (!matchedSize) {
+                const err: any = new Error(
+                  `La talla seleccionada (${item.sizeName || item.sizeId}) ya no existe.`,
+                );
+                err.status = 400;
+                throw err;
+              }
+              if (matchedSize.color?.id && Number(matchedSize.color.id) !== Number(color.id)) {
+                const err: any = new Error('La talla seleccionada no corresponde al color indicado.');
+                err.status = 400;
+                throw err;
+              }
+            } else if (colorSizes.length > 0) {
               const err: any = new Error(
-                `La cantidad para '${title} (${colorName})' debe ser un número entero.`,
+                `El color '${color.name}' maneja tallas. Selecciona la talla a transferir.`,
               );
               err.status = 400;
               throw err;
             }
 
-            const prev = requestedByColor.get(color.id);
-            requestedByColor.set(color.id, {
-              color,
+            const qty = Number(Number(item.quantity).toFixed(3));
+            const title = item.title || item.productName || color.product?.title || 'Producto';
+            const colorName = item.selectedColor || item.colorName || color.name || 'N/A';
+            const sizeName = item.sizeName || matchedSize?.name || null;
+
+            if (!color.product?.isWeighed && !Number.isInteger(qty)) {
+              const err: any = new Error(
+                `La cantidad para '${title} (${colorName}${sizeName ? ` · ${sizeName}` : ''})' debe ser un número entero.`,
+              );
+              err.status = 400;
+              throw err;
+            }
+
+            const variantKey = `${color.id}:${matchedSize ? matchedSize.id : 'base'}`;
+            const prev = requestedByVariant.get(variantKey);
+            requestedByVariant.set(variantKey, {
+              colorId: Number(color.id),
+              sizeId: matchedSize ? Number(matchedSize.id) : null,
               qty: Number(((prev?.qty || 0) + qty).toFixed(3)),
-              label: `${title} (${colorName})`,
+              label: `${title} (${colorName}${sizeName ? ` · ${sizeName}` : ''})`,
             });
 
             formattedItems.push({
               productId: item.productId || color.product?.documentId || color.product?.id || null,
               colorId: color.documentId || color.id,
+              ...(matchedSize ? { sizeId: matchedSize.documentId || matchedSize.id, sizeName } : {}),
               title,
               colorName,
               productCode: color.product?.productCode || null,
               colorCode: color.code || null,
-              unitCost: Number(color.product?.costPrice || 0),
+              ...(matchedSize?.sku ? { sizeSku: matchedSize.sku } : {}),
+              unitCost: Number(matchedSize?.costPrice ?? color.product?.costPrice ?? 0),
               isWeighed: Boolean(color.product?.isWeighed),
               quantity: qty,
             });
           }
 
-          for (const [colorNumericId, info] of requestedByColor.entries()) {
-            const whStock = await dbQuery('api::warehouse-stock.warehouse-stock').findOne({
+          for (const info of requestedByVariant.values()) {
+            const candidateStocks = (await dbQuery('api::warehouse-stock.warehouse-stock').findMany({
               where: {
-                color: colorNumericId,
+                color: info.colorId,
                 warehouse: sourceWh.id,
               },
               select: ['id', 'stock'],
+              populate: ['size'],
               transacting: trx,
-            });
+            })) as any[];
+
+            const whStock = candidateStocks.find((ws: any) =>
+              info.sizeId ? Number(ws?.size?.id) === info.sizeId : !ws?.size,
+            );
             const available = Number(whStock?.stock || 0);
             if (available < info.qty) {
               const err: any = new Error(
@@ -331,6 +371,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
 
         const sanitizedCounts = counts.map((entry: any) => ({
           colorId: entry?.colorId,
+          sizeId: entry?.sizeId || null,
           countedStock: Number(entry?.countedStock),
         }));
 
@@ -370,21 +411,29 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
             throw err;
           }
 
-          // Deduplicar conservando el último conteo por variante si el escáner envió duplicados
-          const latestByColor = new Map<string, number>();
+          // Deduplicar conservando el último conteo por variante+talla si el escáner envió duplicados
+          const latestByVariant = new Map<
+            string,
+            { colorId: string | number; sizeId: string | number | null; counted: number }
+          >();
           for (const entry of sanitizedCounts) {
-            latestByColor.set(String(entry.colorId), Number(entry.countedStock.toFixed(3)));
+            const vKey = entry.sizeId ? `${entry.colorId}::${entry.sizeId}` : String(entry.colorId);
+            latestByVariant.set(vKey, {
+              colorId: entry.colorId,
+              sizeId: entry.sizeId,
+              counted: Number(entry.countedStock.toFixed(3)),
+            });
           }
 
           const inItems: any[] = [];
           const outItems: any[] = [];
           const summaryAdjustments: any[] = [];
 
-          for (const [rawColorId, counted] of latestByColor.entries()) {
+          for (const { colorId: rawColorId, sizeId: rawSizeId, counted } of latestByVariant.values()) {
             const color = await dbQuery('api::color.color').findOne({
               where: buildIdWhere(rawColorId),
               select: ['id', 'documentId', 'name'],
-              populate: ['product'],
+              populate: ['product', 'sizes'],
               transacting: trx,
             });
 
@@ -394,24 +443,56 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
               throw err;
             }
 
-            if (!color.product?.isWeighed && !Number.isInteger(counted)) {
-              const title = color.product?.title || 'Producto';
-              const colorName = color.name || 'N/A';
+            let matchedSize: any = null;
+            if (rawSizeId) {
+              matchedSize = await dbQuery('api::size.size').findOne({
+                where: buildIdWhere(rawSizeId),
+                select: ['id', 'documentId', 'name'],
+                populate: ['color'],
+                transacting: trx,
+              });
+              if (!matchedSize) {
+                const err: any = new Error(`Talla no encontrada (${rawSizeId}).`);
+                err.status = 400;
+                throw err;
+              }
+              if (matchedSize.color?.id && Number(matchedSize.color.id) !== Number(color.id)) {
+                const err: any = new Error('La talla indicada no corresponde al color auditado.');
+                err.status = 400;
+                throw err;
+              }
+            } else if (Array.isArray(color.sizes) && color.sizes.length > 0) {
               const err: any = new Error(
-                `El conteo para '${title} (${colorName})' debe ser un número entero.`,
+                `El color '${color.name}' maneja tallas; especifica la talla auditada.`,
               );
               err.status = 400;
               throw err;
             }
 
-            const whStock = await dbQuery('api::warehouse-stock.warehouse-stock').findOne({
+            if (!color.product?.isWeighed && !Number.isInteger(counted)) {
+              const title = color.product?.title || 'Producto';
+              const colorName = color.name || 'N/A';
+              const sizeLabel = matchedSize?.name ? ` · ${matchedSize.name}` : '';
+              const err: any = new Error(
+                `El conteo para '${title} (${colorName}${sizeLabel})' debe ser un número entero.`,
+              );
+              err.status = 400;
+              throw err;
+            }
+
+            const candidateWhStocks = (await dbQuery('api::warehouse-stock.warehouse-stock').findMany({
               where: {
                 color: color.id,
                 warehouse: wh.id,
               },
               select: ['id', 'stock'],
+              populate: ['size'],
               transacting: trx,
-            });
+            })) as any[];
+
+            const whStock = candidateWhStocks.find((ws: any) =>
+              matchedSize ? Number(ws?.size?.id) === Number(matchedSize.id) : !ws?.size,
+            );
 
             const systemStock = Number(whStock?.stock || 0);
             const delta = Number((counted - systemStock).toFixed(3));
@@ -421,9 +502,11 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
 
             const title = color.product?.title || 'Producto';
             const colorName = color.name || 'N/A';
+            const sizeName = matchedSize?.name || null;
             const movementItem = {
               productId: color.product?.id || null,
               colorId: color.documentId || color.id,
+              ...(matchedSize ? { sizeId: matchedSize.documentId || matchedSize.id, sizeName } : {}),
               title,
               colorName,
               quantity: Math.abs(delta),
@@ -437,6 +520,7 @@ export default factories.createCoreController('api::warehouse.warehouse', ({ str
 
             summaryAdjustments.push({
               colorId: color.documentId || color.id,
+              ...(matchedSize ? { sizeId: matchedSize.documentId || matchedSize.id, sizeName } : {}),
               productTitle: title,
               colorName,
               systemStock,

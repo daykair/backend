@@ -130,12 +130,14 @@ async function deleteVariantWithStockCleanup(
         populate: {
             images: true,
             colorImage: true,
+            sizes: true,
             warehouse_stocks: {
                 populate: {
-                    warehouse: true
+                    warehouse: true,
+                    size: true
                 }
             }
-        }
+        } as any
     }) as any;
 
     if (!colorWithRelations) return;
@@ -147,6 +149,7 @@ async function deleteVariantWithStockCleanup(
     for (const ws of warehouseStocks) {
         const qty = Number(ws?.stock || 0);
         const whDocId = ws?.warehouse?.documentId;
+        const sizeDocId = ws?.size?.documentId || null;
         if (qty > 0 && whDocId) {
             try {
                 await strapi.documents('api::inventory-movement.inventory-movement').create({
@@ -154,6 +157,7 @@ async function deleteVariantWithStockCleanup(
                         type: 'OUT',
                         quantity: qty,
                         color: colorDocId,
+                        ...(sizeDocId ? { size: sizeDocId } : {}),
                         warehouse: whDocId,
                         reason,
                         date: new Date().toISOString(),
@@ -174,6 +178,19 @@ async function deleteVariantWithStockCleanup(
                 });
             } catch (wsErr) {
                 console.error('[Product Controller] Error deleting warehouse-stock:', wsErr);
+            }
+        }
+    }
+
+    const sizes = Array.isArray(colorWithRelations.sizes) ? colorWithRelations.sizes : [];
+    for (const sz of sizes) {
+        if (sz?.documentId) {
+            try {
+                await (strapi.documents('api::size.size' as any) as any).delete({
+                    documentId: sz.documentId
+                });
+            } catch (szErr) {
+                console.error('[Product Controller] Error deleting size:', szErr);
             }
         }
     }
@@ -240,9 +257,20 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     populate: {
                         images: true,
                         colorImage: true,
+                        sizes: {
+                            sort: ['sortOrder:asc', 'name:asc'],
+                            populate: {
+                                warehouse_stocks: {
+                                    populate: {
+                                        warehouse: true
+                                    }
+                                }
+                            }
+                        },
                         warehouse_stocks: {
                             populate: {
-                                warehouse: true
+                                warehouse: true,
+                                size: true
                             }
                         }
                     }
@@ -437,6 +465,211 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     );
                 }
 
+                const parseOptionalMoney = (rawVal: unknown, decimals: number, label: string): number | null => {
+                    if (rawVal === undefined || rawVal === null || rawVal === '') return null;
+                    const num = Number(rawVal);
+                    if (!Number.isFinite(num) || num < 0) {
+                        throw new Error(`El campo "${label}" debe ser un número válido >= 0.`);
+                    }
+                    return Number(num.toFixed(decimals));
+                };
+
+                const syncSizesForColor = async (
+                    targetColorDocId: string,
+                    variantName: string,
+                    incomingSizes: any[] | undefined,
+                    defaultWarehouseId?: any
+                ) => {
+                    if (!Array.isArray(incomingSizes)) return;
+
+                    const existingSizes = (await (strapi.documents('api::size.size' as any) as any).findMany({
+                        filters: { color: { documentId: targetColorDocId } },
+                        populate: {
+                            warehouse_stocks: {
+                                populate: { warehouse: true }
+                            }
+                        },
+                        limit: 500
+                    })) as any[];
+
+                    const incomingSizeIds = new Set(
+                        incomingSizes
+                            .map((s: any) => s?.documentId || s?.id)
+                            .filter(Boolean)
+                            .map((id: any) => String(id))
+                    );
+
+                    const sizesToDelete = existingSizes.filter(
+                        (es: any) =>
+                            !incomingSizeIds.has(String(es.documentId)) &&
+                            !incomingSizeIds.has(String(es.id))
+                    );
+                    for (const es of sizesToDelete) {
+                        const sizeWhStocks = Array.isArray(es.warehouse_stocks) ? es.warehouse_stocks : [];
+                        for (const ws of sizeWhStocks) {
+                            const qty = Number(ws?.stock || 0);
+                            const whDocId = ws?.warehouse?.documentId;
+                            if (qty > 0 && whDocId) {
+                                await strapi.documents('api::inventory-movement.inventory-movement').create({
+                                    data: {
+                                        type: 'OUT',
+                                        quantity: qty,
+                                        color: targetColorDocId,
+                                        size: es.documentId,
+                                        product: productId,
+                                        warehouse: whDocId,
+                                        reason: `Talla eliminada al actualizar "${title}" (${variantName} · ${es.name})`,
+                                        date: new Date().toISOString(),
+                                        ...(performedById ? { performedBy: performedById } : {})
+                                    } as any
+                                });
+                            }
+                            if (ws?.documentId) {
+                                await strapi.documents('api::warehouse-stock.warehouse-stock').delete({
+                                    documentId: ws.documentId
+                                });
+                            }
+                        }
+                        await (strapi.documents('api::size.size' as any) as any).delete({
+                            documentId: es.documentId
+                        });
+                    }
+
+                    // Al activar tallas en un color existente con stock sin talla (size = null),
+                    // retirar el stock base en kardex antes de cargar las tallas para evitar doble conteo.
+                    if (incomingSizes.length > 0) {
+                        const colorWhStocks = (await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
+                            filters: { color: { documentId: targetColorDocId } } as any,
+                            populate: ['size', 'warehouse'],
+                            limit: 500
+                        })) as any[];
+
+                        const legacyBaseStocks = colorWhStocks.filter((ws: any) => !ws?.size);
+                        for (const legacyWs of legacyBaseStocks) {
+                            const legacyQty = Number(legacyWs?.stock || 0);
+                            const legacyWhDocId = legacyWs?.warehouse?.documentId;
+                            if (legacyQty > 0 && legacyWhDocId) {
+                                await strapi.documents('api::inventory-movement.inventory-movement').create({
+                                    data: {
+                                        type: 'OUT',
+                                        quantity: legacyQty,
+                                        color: targetColorDocId,
+                                        product: productId,
+                                        warehouse: legacyWhDocId,
+                                        reason: `Migración de variante a tallas: ${title} (${variantName})`,
+                                        date: new Date().toISOString(),
+                                        ...(performedById ? { performedBy: performedById } : {})
+                                    } as any
+                                });
+                            }
+                            if (legacyWs?.documentId) {
+                                await strapi.documents('api::warehouse-stock.warehouse-stock').delete({
+                                    documentId: legacyWs.documentId
+                                });
+                            }
+                        }
+                    }
+
+                    for (let sIdx = 0; sIdx < incomingSizes.length; sIdx++) {
+                        const sz = incomingSizes[sIdx];
+                        if (!sz) continue;
+                        const sizeName = String(sz.name || '').trim();
+                        if (!sizeName) {
+                            throw new Error(`Todas las tallas de "${variantName}" deben tener nombre.`);
+                        }
+
+                        const sizeSku = sz.sku !== undefined && sz.sku !== null
+                            ? String(sz.sku).trim().slice(0, 64) || null
+                            : null;
+                        const sortOrder = Number.isFinite(Number(sz.sortOrder))
+                            ? Math.trunc(Number(sz.sortOrder))
+                            : sIdx;
+                        const sPrice = parseOptionalMoney(sz.price, 2, `Precio de talla ${sizeName}`);
+                        const sWholesale = parseOptionalMoney(sz.wholesalePrice, 2, `Precio mayor de talla ${sizeName}`);
+                        const sCost = parseOptionalMoney(sz.costPrice, 4, `Costo de talla ${sizeName}`);
+                        const sIsDiscounted = Boolean(sz.isDiscounted);
+                        const sDiscount = sIsDiscounted
+                            ? Number(Math.min(100, Math.max(0, Number(sz.discount) || 0)).toFixed(2))
+                            : 0;
+
+                        const rawSizeRef = sz.documentId || sz.id;
+                        const matchedExistingSize = rawSizeRef
+                            ? existingSizes.find(
+                                  (es: any) =>
+                                      String(es.documentId) === String(rawSizeRef) ||
+                                      String(es.id) === String(rawSizeRef)
+                              )
+                            : null;
+
+                        if (matchedExistingSize) {
+                            await (strapi.documents('api::size.size' as any) as any).update({
+                                documentId: matchedExistingSize.documentId,
+                                data: {
+                                    name: sizeName,
+                                    sku: sizeSku,
+                                    sortOrder,
+                                    price: sPrice,
+                                    wholesalePrice: sWholesale,
+                                    ...(sz.costPrice !== undefined ? { costPrice: sCost } : {}),
+                                    isDiscounted: sIsDiscounted,
+                                    discount: sDiscount
+                                }
+                            });
+                        } else {
+                            const initialSizeStock = Math.max(0, Number(sz.stock) || 0);
+                            const sizeWhDocId =
+                                initialSizeStock > 0
+                                    ? await resolveTargetWarehouseDocId(strapi, sz.initialWarehouseId || defaultWarehouseId)
+                                    : null;
+
+                            const createdSize = await (strapi.documents('api::size.size' as any) as any).create({
+                                data: {
+                                    color: targetColorDocId,
+                                    name: sizeName,
+                                    sku: sizeSku,
+                                    sortOrder,
+                                    stock: initialSizeStock > 0 && !sizeWhDocId ? initialSizeStock : 0,
+                                    price: sPrice,
+                                    wholesalePrice: sWholesale,
+                                    ...(sCost !== null ? { costPrice: sCost } : {}),
+                                    isDiscounted: sIsDiscounted,
+                                    discount: sDiscount
+                                }
+                            });
+
+                            if (initialSizeStock > 0 && sizeWhDocId) {
+                                await strapi.documents('api::inventory-movement.inventory-movement').create({
+                                    data: {
+                                        type: 'IN',
+                                        quantity: initialSizeStock,
+                                        color: targetColorDocId,
+                                        size: createdSize.documentId,
+                                        product: productId,
+                                        warehouse: sizeWhDocId,
+                                        reason: `Stock inicial de talla: ${title} (${variantName} · ${sizeName})`,
+                                        date: new Date().toISOString(),
+                                        ...(performedById ? { performedBy: performedById } : {})
+                                    } as any
+                                });
+                            }
+                        }
+                    }
+
+                    if (incomingSizes.length > 0) {
+                        const updatedSizes = (await (strapi.documents('api::size.size' as any) as any).findMany({
+                            filters: { color: { documentId: targetColorDocId } },
+                            limit: 500
+                        })) as any[];
+                        const aggregatedColorStock = Number(
+                            updatedSizes.reduce((acc, s) => acc + Number(s?.stock || 0), 0).toFixed(3)
+                        );
+                        await strapi.db.query('api::color.color').updateMany({
+                            where: { documentId: targetColorDocId },
+                            data: { stock: aggregatedColorStock }
+                        });
+                    }
+                };
+
                 // Crear o actualizar variantes activas
                 for (const variant of validIncomingVariants) {
                     if (!variant) continue;
@@ -492,8 +725,16 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                             documentId: matchedExisting.documentId,
                             data: updateData
                         });
+
+                        await syncSizesForColor(
+                            matchedExisting.documentId,
+                            variantName,
+                            variant.sizes,
+                            variant.initialWarehouseId
+                        );
                     } else {
-                        const initialStock = Math.max(0, Number(variant.stock) || 0);
+                        const variantHasSizes = Array.isArray(variant.sizes) && variant.sizes.length > 0;
+                        const initialStock = variantHasSizes ? 0 : Math.max(0, Number(variant.stock) || 0);
                         const targetWhDocId =
                             initialStock > 0
                                 ? await resolveTargetWarehouseDocId(strapi, variant.initialWarehouseId)
@@ -530,6 +771,13 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                                 } as any
                             });
                         }
+
+                        await syncSizesForColor(
+                            createdColor.documentId,
+                            variantName,
+                            variant.sizes,
+                            variant.initialWarehouseId
+                        );
                     }
                 }
 
@@ -616,9 +864,11 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             string,
             {
                 color: any;
+                size: any | null;
                 targetWhDocId: string | null;
                 title: string;
                 selectedColor: string;
+                sizeName: string;
                 totalQty: number;
             }
         >();
@@ -632,13 +882,39 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
             const colorDocId = await resolveDocumentId(strapi, 'api::color.color', item.colorId);
             const color = colorDocId
-                ? await strapi.documents('api::color.color').findOne({
-                      documentId: colorDocId
-                  })
+                ? (await strapi.documents('api::color.color').findOne({
+                      documentId: colorDocId,
+                      populate: ['sizes']
+                  }) as any)
                 : null;
 
             if (!color) {
                 errors.push(`La variante ${item.selectedColor || ''} del producto ${item.title} ya no existe.`);
+                continue;
+            }
+
+            const colorSizes = Array.isArray(color.sizes) ? color.sizes : [];
+            let matchedSize: any = null;
+            if (item.sizeId) {
+                const sizeDocId = await resolveDocumentId(strapi, 'api::size.size', item.sizeId);
+                matchedSize = sizeDocId
+                    ? colorSizes.find((s: any) => s.documentId === sizeDocId)
+                    : null;
+                if (!matchedSize && sizeDocId) {
+                    const dbSize: any = await (strapi.documents('api::size.size' as any) as any).findOne({
+                        documentId: sizeDocId,
+                        populate: ['color']
+                    });
+                    if (dbSize && dbSize.color?.documentId === color.documentId) {
+                        matchedSize = dbSize;
+                    }
+                }
+                if (!matchedSize) {
+                    errors.push(`La talla seleccionada para ${item.title} (${color.name}) ya no existe.`);
+                    continue;
+                }
+            } else if (colorSizes.length > 0) {
+                errors.push(`Debes seleccionar una talla para ${item.title} (${color.name}).`);
                 continue;
             }
 
@@ -664,38 +940,51 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 targetWhDocId = resolvedItemWhDocId;
             }
 
-            const key = `${color.documentId}::${targetWhDocId || 'GLOBAL'}`;
+            const key = `${color.documentId}::${matchedSize?.documentId || 'BASE'}::${targetWhDocId || 'GLOBAL'}`;
             const prev = requestedByKey.get(key);
             if (prev) {
                 prev.totalQty = Number((prev.totalQty + parsedQty).toFixed(3));
             } else {
                 requestedByKey.set(key, {
                     color,
+                    size: matchedSize,
                     targetWhDocId,
                     title: item.title || 'Producto',
-                    selectedColor: item.selectedColor || '',
+                    selectedColor: item.selectedColor || color.name || '',
+                    sizeName: item.sizeName || matchedSize?.name || '',
                     totalQty: Number(parsedQty.toFixed(3)),
                 });
             }
         }
 
         for (const reqEntry of requestedByKey.values()) {
-            const { color, targetWhDocId, title, selectedColor, totalQty } = reqEntry;
+            const { color, size, targetWhDocId, title, selectedColor, sizeName, totalQty } = reqEntry;
+            const variantLabel = sizeName ? `${selectedColor} · ${sizeName}` : selectedColor;
             if (targetWhDocId) {
-                const whStock = await strapi.documents('api::warehouse-stock.warehouse-stock').findFirst({
+                const candidateWhStocks = (await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
                     filters: {
                         color: { documentId: color.documentId },
                         warehouse: { documentId: targetWhDocId }
-                    } as any
-                });
+                    } as any,
+                    populate: ['size'],
+                    limit: 100
+                })) as any[];
+                const whStock = candidateWhStocks.find((ws: any) =>
+                    size ? ws?.size?.documentId === size.documentId : !ws?.size
+                );
                 const available = Number(whStock?.stock || 0);
                 if (available < totalQty) {
                     errors.push(
-                        `Stock insuficiente en el almacén para ${title} (${selectedColor}). Pedidos: ${totalQty}, Disponibles: ${available}.`
+                        `Stock insuficiente en el almacén para ${title} (${variantLabel}). Pedidos: ${totalQty}, Disponibles: ${available}.`
                     );
                 }
-            } else if (Number(color.stock || 0) < totalQty) {
-                errors.push(`Stock insuficiente para ${title} (${selectedColor}). Pedidos: ${totalQty}, Disponibles: ${color.stock}.`);
+            } else {
+                const availableGlobal = Number((size ? size.stock : color.stock) || 0);
+                if (availableGlobal < totalQty) {
+                    errors.push(
+                        `Stock insuficiente para ${title} (${variantLabel}). Pedidos: ${totalQty}, Disponibles: ${availableGlobal}.`
+                    );
+                }
             }
         }
 
@@ -879,7 +1168,10 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 colors: {
                     populate: {
                         images: true,
-                        colorImage: true
+                        colorImage: true,
+                        sizes: {
+                            sort: ['sortOrder:asc', 'name:asc']
+                        }
                     }
                 }
             };
@@ -893,16 +1185,23 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             });
 
             const stockByColorDocId = new Map<string, number>();
+            const stockBySizeDocId = new Map<string, number>();
             if (webWhDocId) {
                 const whStocks: any[] = await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
                     filters: { warehouse: { documentId: webWhDocId } } as any,
-                    populate: { color: true },
+                    populate: { color: true, size: true },
                     limit: 20000
                 });
                 for (const ws of whStocks) {
                     const cDocId = ws?.color?.documentId;
+                    const sDocId = ws?.size?.documentId;
+                    const qty = Number(ws?.stock || 0);
+                    if (sDocId) {
+                        stockBySizeDocId.set(String(sDocId), qty);
+                    }
                     if (cDocId) {
-                        stockByColorDocId.set(String(cDocId), Number(ws.stock || 0));
+                        const prev = stockByColorDocId.get(String(cDocId)) ?? 0;
+                        stockByColorDocId.set(String(cDocId), Number((prev + qty).toFixed(3)));
                     }
                 }
             }
@@ -911,12 +1210,34 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 .map((product) => {
                     const { costPrice: _hiddenCostPrice, ...safeProduct } = product;
                     const colors = Array.isArray(safeProduct.colors)
-                        ? safeProduct.colors.map((color: any) => ({
-                              ...color,
-                              stock: webWhDocId
-                                  ? stockByColorDocId.get(String(color.documentId)) ?? 0
-                                  : Number(color.stock ?? 0)
-                          }))
+                        ? safeProduct.colors.map((color: any) => {
+                              const rawSizes = Array.isArray(color.sizes) ? color.sizes : [];
+                              const safeSizes = rawSizes.map((sz: any) => {
+                                  const { costPrice: _hiddenSizeCost, ...safeSz } = sz;
+                                  return {
+                                      ...safeSz,
+                                      stock: webWhDocId
+                                          ? stockBySizeDocId.get(String(sz.documentId)) ?? 0
+                                          : Number(sz.stock ?? 0)
+                                  };
+                              });
+                              const effectiveColorStock =
+                                  safeSizes.length > 0
+                                      ? Number(
+                                            safeSizes
+                                                .reduce((sum: number, sz: any) => sum + Number(sz.stock || 0), 0)
+                                                .toFixed(3)
+                                        )
+                                      : webWhDocId
+                                        ? stockByColorDocId.get(String(color.documentId)) ?? 0
+                                        : Number(color.stock ?? 0);
+
+                              return {
+                                  ...color,
+                                  sizes: safeSizes,
+                                  stock: effectiveColorStock
+                              };
+                          })
                         : [];
                     return {
                         ...safeProduct,
@@ -929,7 +1250,12 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                     }
                     if (requireDiscounted) {
                         const prodDisc = product.isDiscounted && Number(product.discount || 0) > 0;
-                        const varDisc = product.colors.some((c: any) => c.isDiscounted && Number(c.discount || 0) > 0);
+                        const varDisc = product.colors.some(
+                            (c: any) =>
+                                (c.isDiscounted && Number(c.discount || 0) > 0) ||
+                                (Array.isArray(c.sizes) &&
+                                    c.sizes.some((s: any) => s.isDiscounted && Number(s.discount || 0) > 0))
+                        );
                         const catDisc = Array.isArray(product.categories) &&
                             product.categories.some((cat: any) => Number(cat?.discount ?? cat?.Discount ?? 0) > 0);
                         if (!prodDisc && !varDisc && !catDisc) return false;
@@ -985,33 +1311,60 @@ export default factories.createCoreController('api::product.product', ({ strapi 
 
             if (!ctx.params?.id) {
                 const colors: any[] = await strapi.documents('api::color.color').findMany({
+                    populate: {
+                        sizes: { sort: ['sortOrder:asc', 'name:asc'] }
+                    } as any,
                     limit: 20000
                 });
 
                 const stockByColorDocId = new Map<string, number>();
+                const stockBySizeDocId = new Map<string, number>();
                 if (webWhDocId) {
                     const whStocks: any[] = await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
                         filters: { warehouse: { documentId: webWhDocId } } as any,
-                        populate: { color: true },
+                        populate: { color: true, size: true },
                         limit: 20000
                     });
                     for (const ws of whStocks) {
                         const cDocId = ws?.color?.documentId;
+                        const sDocId = ws?.size?.documentId;
+                        const qty = Number(ws?.stock || 0);
+                        if (sDocId) {
+                            stockBySizeDocId.set(String(sDocId), qty);
+                        }
                         if (cDocId) {
-                            stockByColorDocId.set(String(cDocId), Number(ws.stock || 0));
+                            const prev = stockByColorDocId.get(String(cDocId)) ?? 0;
+                            stockByColorDocId.set(String(cDocId), Number((prev + qty).toFixed(3)));
                         }
                     }
                 }
 
                 return ctx.send({
-                    data: colors.map((color) => ({
-                        id: color.id,
-                        documentId: color.documentId,
-                        name: color.name,
-                        stock: webWhDocId
-                            ? stockByColorDocId.get(String(color.documentId)) ?? 0
-                            : Number(color.stock ?? 0)
-                    }))
+                    data: colors.map((color) => {
+                        const rawSizes = Array.isArray(color.sizes) ? color.sizes : [];
+                        const sizes = rawSizes.map((sz: any) => ({
+                            id: sz.id,
+                            documentId: sz.documentId,
+                            name: sz.name,
+                            stock: webWhDocId
+                                ? stockBySizeDocId.get(String(sz.documentId)) ?? 0
+                                : Number(sz.stock ?? 0)
+                        }));
+                        const effectiveColorStock =
+                            sizes.length > 0
+                                ? Number(sizes.reduce((sum: number, sz: any) => sum + Number(sz.stock || 0), 0).toFixed(3))
+                                : webWhDocId
+                                  ? stockByColorDocId.get(String(color.documentId)) ?? 0
+                                  : Number(color.stock ?? 0);
+
+                        return {
+                            id: color.id,
+                            documentId: color.documentId,
+                            name: color.name,
+                            stock: effectiveColorStock,
+                            sizes
+                        };
+                    })
                 });
             }
 
@@ -1021,29 +1374,56 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             }
 
             const color = await strapi.documents('api::color.color').findOne({
-                documentId: colorDocId
+                documentId: colorDocId,
+                populate: {
+                    sizes: { sort: ['sortOrder:asc', 'name:asc'] }
+                } as any
             }) as any;
             if (!color) {
                 return ctx.notFound('Variante no encontrada');
             }
 
+            const colorSizes = Array.isArray(color.sizes) ? color.sizes : [];
             let effectiveStock = Number(color.stock ?? 0);
+            const sizeStockMap = new Map<string, number>();
+
             if (webWhDocId) {
-                const whStock = await strapi.documents('api::warehouse-stock.warehouse-stock').findFirst({
+                const whStocks = (await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
                     filters: {
                         color: { documentId: color.documentId },
                         warehouse: { documentId: webWhDocId }
-                    } as any
-                });
-                effectiveStock = Number(whStock?.stock ?? 0);
+                    } as any,
+                    populate: ['size'],
+                    limit: 500
+                })) as any[];
+                effectiveStock = Number(
+                    whStocks.reduce((sum, ws) => sum + Number(ws?.stock || 0), 0).toFixed(3)
+                );
+                for (const ws of whStocks) {
+                    if (ws?.size?.documentId) {
+                        sizeStockMap.set(String(ws.size.documentId), Number(ws.stock || 0));
+                    }
+                }
             }
+
+            const sizes = colorSizes.map((sz: any) => ({
+                id: sz.id,
+                documentId: sz.documentId,
+                name: sz.name,
+                stock: webWhDocId
+                    ? sizeStockMap.get(String(sz.documentId)) ?? 0
+                    : Number(sz.stock ?? 0)
+            }));
 
             return ctx.send({
                 data: {
                     id: color.id,
                     documentId: color.documentId,
                     name: color.name,
-                    stock: effectiveStock
+                    stock: sizes.length > 0
+                        ? Number(sizes.reduce((sum: number, s: any) => sum + Number(s.stock || 0), 0).toFixed(3))
+                        : effectiveStock,
+                    sizes
                 }
             });
         } catch (err: any) {
