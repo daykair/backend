@@ -6,6 +6,12 @@ export default {
       handler: 'api::company-setting.company-setting.getAdminSettings',
       config: {
         auth: false,
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { allowAnyStaff: true },
+          },
+        ],
       },
     },
     {

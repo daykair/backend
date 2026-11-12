@@ -119,6 +119,9 @@ export default async (policyContext: any, config: any, { strapi }: any) => {
     if (config?.roles && Array.isArray(config.roles)) {
         // Si la ruta restringe explícitamente a una lista de roles (ej. ['admin'])
         isAllowed = config.roles.includes(roleType) || config.roles.includes(roleName);
+    } else if (config?.allowAnyStaff === true) {
+        // Cualquier usuario de equipo autenticado (ya excluimos bloqueados y roles públicos/clientes arriba)
+        isAllowed = true;
     } else {
         // Determinar permisos requeridos: explícitos en config.permission o inferidos automáticamente del handler/método
         const explicitPerms = config?.permission

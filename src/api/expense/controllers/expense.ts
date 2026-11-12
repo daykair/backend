@@ -1,10 +1,12 @@
 import { factories } from '@strapi/strapi';
+import { buildAdminFindParams } from '../../../utils/adminQuery';
 
 export default factories.createCoreController('api::expense.expense', ({ strapi }) => ({
     async findAdmin(ctx) {
         try {
+            const params = buildAdminFindParams(ctx.query);
             const expenses = await strapi.documents('api::expense.expense').findMany({
-                ...ctx.query,
+                ...params,
                 populate: {
                     ...((ctx.query.populate as any) || {}),
                     performedBy: true

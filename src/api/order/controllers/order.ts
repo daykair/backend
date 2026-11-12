@@ -4,11 +4,12 @@
 
 import { factories } from '@strapi/strapi';
 import * as yup from 'yup';
+import { buildAdminFindParams } from '../../../utils/adminQuery';
 
 const orderLineItemSchema = yup.object({
   productId: yup.mixed().required(),
   colorId: yup.mixed().nullable().optional(),
-  quantity: yup.number().required().min(1),
+  quantity: yup.number().required().min(0.01),
   unitPrice: yup.number().required().min(0),
   unitCost: yup.number().optional().min(0),
   productName: yup.string().optional(),
@@ -94,8 +95,9 @@ const orderRequestSchema = yup.object({
 export default factories.createCoreController('api::order.order', ({ strapi }) => ({
   async findAdmin(ctx) {
     try {
+      const params = buildAdminFindParams(ctx.query);
       const orders = await strapi.documents('api::order.order').findMany({
-        ...ctx.query,
+        ...params,
         populate: {
           ...((ctx.query.populate as any) || {}),
           performedBy: true,

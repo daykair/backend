@@ -3,6 +3,7 @@
  */
 
 import { factories } from '@strapi/strapi';
+import { buildAdminFindParams } from '../../../utils/adminQuery';
 
 function slugifySpanish(value: string): string {
     return String(value || '')
@@ -196,14 +197,8 @@ async function deleteVariantWithStockCleanup(
 export default factories.createCoreController('api::product.product', ({ strapi }) => ({
     async findAdmin(ctx) {
         try {
-            const hasExplicitLimit =
-                ctx.query?.limit !== undefined ||
-                ctx.query?.pagination !== undefined;
-
-            const products = await strapi.documents('api::product.product').findMany({
-                ...ctx.query,
-                ...(hasExplicitLimit ? {} : { limit: -1 })
-            });
+            const params = buildAdminFindParams(ctx.query);
+            const products = await strapi.documents('api::product.product').findMany(params);
 
             return ctx.send({ data: products });
         } catch (err: any) {
