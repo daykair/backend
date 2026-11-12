@@ -2,40 +2,234 @@
  * product controller
  */
 
-import { factories } from '@strapi/strapi'
+import { factories } from '@strapi/strapi';
 
-export default factories.createCoreController('api::product.product', ({ strapi }) => ({
-    // ... tus métodos existentes ...
-    async findAdmin(ctx) {
-        try {
-            const products = await strapi.documents('api::product.product').findMany({
-                ...ctx.query
-            })
+function slugifySpanish(value: string): string {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '');
+}
 
-            return ctx.send({ data: products })
-        } catch (err) {
-            ctx.body = err;
+async function resolveDocumentId(
+    strapi: any,
+    uid: string,
+    idOrDocId: string | number | undefined | null
+): Promise<string | null> {
+    if (idOrDocId === undefined || idOrDocId === null || idOrDocId === '') return null;
+    const raw = String(idOrDocId).trim();
+    if (!raw) return null;
+
+    if (!isNaN(Number(raw)) && !raw.includes('-')) {
+        const entity = await strapi.documents(uid).findFirst({
+            filters: { id: Number(raw) } as any
+        });
+        return entity?.documentId || null;
+    }
+
+    const entity = await strapi.documents(uid).findOne({ documentId: raw });
+    return entity?.documentId || null;
+}
+
+async function resolveUniqueSlug(
+    strapi: any,
+    desiredSlug: string,
+    excludeProductDocId?: string | null
+): Promise<string> {
+    const base = slugifySpanish(desiredSlug) || 'producto';
+    let candidate = base;
+    let suffix = 2;
+
+    while (suffix <= 50) {
+        const existing = await strapi.documents('api::product.product').findFirst({
+            filters: {
+                slug: candidate,
+                ...(excludeProductDocId ? { documentId: { $ne: excludeProductDocId } } : {})
+            } as any
+        });
+        if (!existing) return candidate;
+        candidate = `${base}-${suffix}`;
+        suffix += 1;
+    }
+
+    return `${base}-${Date.now()}`;
+}
+
+async function resolveTargetWarehouseDocId(
+    strapi: any,
+    preferredWarehouseId?: string | number | null
+): Promise<string | null> {
+    if (preferredWarehouseId) {
+        const resolved = await resolveDocumentId(strapi, 'api::warehouse.warehouse', preferredWarehouseId);
+        if (resolved) return resolved;
+    }
+
+    const mainActive = await strapi.documents('api::warehouse.warehouse').findFirst({
+        filters: { code: 'MAIN', isActive: true } as any
+    });
+    if (mainActive?.documentId) return mainActive.documentId;
+
+    const mainAny = await strapi.documents('api::warehouse.warehouse').findFirst({
+        filters: { code: 'MAIN' } as any
+    });
+    if (mainAny?.documentId) return mainAny.documentId;
+
+    const firstActive = await strapi.documents('api::warehouse.warehouse').findFirst({
+        filters: { isActive: true } as any
+    });
+    return firstActive?.documentId || null;
+}
+
+async function resolveCategoryDocIds(strapi: any, rawCategories: any[]): Promise<string[]> {
+    const resolved: string[] = [];
+    for (const item of rawCategories) {
+        if (!item) continue;
+        const raw = typeof item === 'object' ? (item.documentId || item.id) : item;
+        const docId = await resolveDocumentId(strapi, 'api::category.category', raw);
+        if (docId && !resolved.includes(docId)) {
+            resolved.push(docId);
         }
-    },
-    async findOneAdmin(ctx) {
+    }
+    return resolved;
+}
+
+async function userHasExactPermission(strapi: any, user: any, action: string): Promise<boolean> {
+    if (!user) return false;
+    const roleType = String(user.role?.type || '').toLowerCase();
+    const roleName = String(user.role?.name || '').toLowerCase();
+    const isSuperAdmin = roleType === 'admin' || roleType.includes('admin') || roleName.includes('admin');
+    if (isSuperAdmin) return true;
+
+    const roleId = user.role?.id;
+    if (!roleId) return false;
+
+    const matched = await strapi.db.query('plugin::users-permissions.permission').findOne({
+        where: { role: roleId, action }
+    });
+    return Boolean(matched);
+}
+
+async function removeMediaFilesSafely(strapi: any, mediaInput: any, skipMediaIds?: Set<number>) {
+    if (!mediaInput) return;
+    const files = Array.isArray(mediaInput) ? mediaInput : [mediaInput];
+    const fileService = strapi.plugin('upload').service('upload');
+
+    for (const img of files) {
+        if (!img?.id) continue;
+        if (skipMediaIds && skipMediaIds.has(Number(img.id))) continue;
         try {
-            let targetDocId = ctx.params.id;
-            if (targetDocId && !isNaN(Number(targetDocId))) {
-                const foundProduct = await strapi.documents('api::product.product').findFirst({
-                    filters: { id: Number(targetDocId) } as any
-                });
-                if (foundProduct) {
-                    targetDocId = foundProduct.documentId;
+            await fileService.remove(img);
+        } catch (err) {
+            console.error('[Product Controller] Error removing orphaned media:', err);
+        }
+    }
+}
+
+async function deleteVariantWithStockCleanup(
+    strapi: any,
+    colorDocId: string,
+    reason: string,
+    performedById?: string | number | null,
+    skipMediaIds?: Set<number>
+) {
+    const colorWithRelations = await strapi.documents('api::color.color').findOne({
+        documentId: colorDocId,
+        populate: {
+            images: true,
+            colorImage: true,
+            warehouse_stocks: {
+                populate: {
+                    warehouse: true
                 }
             }
+        }
+    }) as any;
 
+    if (!colorWithRelations) return;
+
+    const warehouseStocks = Array.isArray(colorWithRelations.warehouse_stocks)
+        ? colorWithRelations.warehouse_stocks
+        : [];
+
+    for (const ws of warehouseStocks) {
+        const qty = Number(ws?.stock || 0);
+        const whDocId = ws?.warehouse?.documentId;
+        if (qty > 0 && whDocId) {
+            try {
+                await strapi.documents('api::inventory-movement.inventory-movement').create({
+                    data: {
+                        type: 'OUT',
+                        quantity: qty,
+                        color: colorDocId,
+                        warehouse: whDocId,
+                        reason,
+                        date: new Date().toISOString(),
+                        ...(performedById ? { performedBy: performedById } : {})
+                    } as any
+                });
+            } catch (movErr) {
+                console.error('[Product Controller] Error logging OUT movement on variant delete:', movErr);
+            }
+        }
+    }
+
+    for (const ws of warehouseStocks) {
+        if (ws?.documentId) {
+            try {
+                await strapi.documents('api::warehouse-stock.warehouse-stock').delete({
+                    documentId: ws.documentId
+                });
+            } catch (wsErr) {
+                console.error('[Product Controller] Error deleting warehouse-stock:', wsErr);
+            }
+        }
+    }
+
+    await removeMediaFilesSafely(strapi, colorWithRelations.images, skipMediaIds);
+    await removeMediaFilesSafely(strapi, colorWithRelations.colorImage, skipMediaIds);
+
+    await strapi.documents('api::color.color').delete({ documentId: colorDocId });
+}
+
+export default factories.createCoreController('api::product.product', ({ strapi }) => ({
+    async findAdmin(ctx) {
+        try {
+            const hasExplicitLimit =
+                ctx.query?.limit !== undefined ||
+                ctx.query?.pagination !== undefined;
+
+            const products = await strapi.documents('api::product.product').findMany({
+                ...ctx.query,
+                ...(hasExplicitLimit ? {} : { limit: -1 })
+            });
+
+            return ctx.send({ data: products });
+        } catch (err: any) {
+            console.error('[findAdmin Error]:', err);
+            return ctx.internalServerError(err?.message || 'Error al obtener productos');
+        }
+    },
+
+    async findOneAdmin(ctx) {
+        try {
+            const targetDocId = await resolveDocumentId(strapi, 'api::product.product', ctx.params.id);
+            if (!targetDocId) {
+                return ctx.notFound('Producto no encontrado');
+            }
+
+            const queryPopulate = (ctx.query?.populate as any) || {};
             const product = await strapi.documents('api::product.product').findOne({
+                ...ctx.query,
                 documentId: targetDocId,
                 populate: {
                     categories: true,
+                    productImage: true,
                     colors: {
                         populate: {
                             images: true,
+                            colorImage: true,
                             warehouse_stocks: {
                                 populate: {
                                     warehouse: true
@@ -43,151 +237,274 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                             }
                         }
                     },
-                    productImage: true,
-                    ...((ctx.query.populate as any) || {})
-                },
-                ...ctx.query
+                    ...queryPopulate
+                }
             });
+
+            if (!product) {
+                return ctx.notFound('Producto no encontrado');
+            }
+
             return ctx.send({ data: product });
-        } catch (err) {
-            ctx.body = err;
+        } catch (err: any) {
+            console.error('[findOneAdmin Error]:', err);
+            return ctx.internalServerError(err?.message || 'Error al obtener el producto');
         }
     },
+
     async saveFull(ctx) {
-        const { productData, variantsData } = ctx.request.body.data;
-        let productId = productData.documentId || productData.id;
-        
-        // Resolve numeric productId to documentId if necessary
-        if (productId && !isNaN(Number(productId))) {
-            const foundProduct = await strapi.documents('api::product.product').findFirst({
-                filters: { id: Number(productId) } as any
-            });
-            if (foundProduct) {
-                productId = foundProduct.documentId;
+        const bodyData = ctx.request.body?.data;
+        if (!bodyData || !bodyData.productData) {
+            return ctx.badRequest('Se requieren los datos del producto (productData).');
+        }
+
+        const { productData: rawProduct, variantsData = [] } = bodyData;
+        const rawProductId = rawProduct.documentId || rawProduct.id;
+        let productId: string | null = null;
+
+        if (rawProductId) {
+            productId = await resolveDocumentId(strapi, 'api::product.product', rawProductId);
+            if (!productId) {
+                return ctx.notFound('El producto a editar no existe.');
             }
         }
 
-        let isNewProduct = !productId;
-        let savedProduct = null;
+        const isNewProduct = !productId;
+        const authStrategy = ctx.state?.auth?.strategy?.name;
+
+        // Validar permiso específico de la operación (creación vs actualización)
+        if (authStrategy !== 'api-token') {
+            const requiredPerm = isNewProduct ? 'api::product.product.create' : 'api::product.product.update';
+            const allowed = await userHasExactPermission(strapi, ctx.state?.user, requiredPerm);
+            if (!allowed) {
+                return ctx.forbidden(
+                    isNewProduct
+                        ? 'No tienes permisos para crear productos.'
+                        : 'No tienes permisos para actualizar productos.'
+                );
+            }
+        }
+
+        const title = String(rawProduct.title || '').trim();
+        if (!title) {
+            return ctx.badRequest('El nombre del producto es obligatorio.');
+        }
+
+        const cleanProductCode =
+            rawProduct.productCode !== undefined && rawProduct.productCode !== null
+                ? String(rawProduct.productCode).trim() || null
+                : null;
+
+        if (cleanProductCode) {
+            const duplicateSku = await strapi.documents('api::product.product').findFirst({
+                filters: {
+                    productCode: cleanProductCode,
+                    ...(productId ? { documentId: { $ne: productId } } : {})
+                } as any
+            });
+            if (duplicateSku) {
+                return ctx.badRequest(`Ya existe otro producto con el código SKU "${cleanProductCode}".`);
+            }
+        }
+
+        const cleanIsDiscounted = Boolean(rawProduct.isDiscounted);
+        const cleanDiscount = cleanIsDiscounted
+            ? Number(Math.min(100, Math.max(0, Number(rawProduct.discount) || 0)).toFixed(2))
+            : 0;
+
+        const cleanPrice = Math.max(0, Number(rawProduct.price) || 0);
+        const cleanWholesalePrice = Math.max(0, Number(rawProduct.wholesalePrice) || 0);
+        const cleanCostPrice = Math.max(0, Number(rawProduct.costPrice) || 0);
+
+        const desiredSlug = rawProduct.slug ? String(rawProduct.slug).trim() : title;
+        const uniqueSlug = await resolveUniqueSlug(strapi, desiredSlug, productId);
+
+        const cleanCategories = Array.isArray(rawProduct.categories)
+            ? await resolveCategoryDocIds(strapi, rawProduct.categories)
+            : undefined;
+
+        const cleanProductImages = Array.isArray(rawProduct.productImage)
+            ? rawProduct.productImage
+                  .map((img: any) => (typeof img === 'object' ? Number(img?.id) : Number(img)))
+                  .filter((id: number) => Number.isFinite(id) && id > 0)
+            : undefined;
+
+        const baseProductPayload: any = {
+            title,
+            slug: uniqueSlug,
+            productCode: cleanProductCode,
+            description: rawProduct.description !== undefined ? String(rawProduct.description || '') : '',
+            price: cleanPrice,
+            wholesalePrice: cleanWholesalePrice,
+            costPrice: cleanCostPrice,
+            isActive: rawProduct.isActive !== undefined ? Boolean(rawProduct.isActive) : true,
+            isWeighed: Boolean(rawProduct.isWeighed),
+            isFeaturedNew: Boolean(rawProduct.isFeaturedNew),
+            isDiscounted: cleanIsDiscounted,
+            discount: cleanDiscount,
+            hasVariants: rawProduct.hasVariants !== undefined ? Boolean(rawProduct.hasVariants) : true,
+        };
+
+        let savedProduct: any = null;
+        const createdVariantDocIds: string[] = [];
+        const performedById = ctx.state?.user?.documentId || ctx.state?.user?.id || null;
 
         try {
-            // 1. Create or Update Product
-            const { id: _pid, documentId: _pdocId, ...cleanProductData } = productData;
-            if (cleanProductData.productCode !== undefined) {
-                cleanProductData.productCode = cleanProductData.productCode?.trim() || null;
-            }
-
+            // 1. Crear o actualizar producto (solo campos permitidos)
             if (isNewProduct) {
-                savedProduct = await strapi.documents('api::product.product').create({ 
-                    data: cleanProductData
+                const createPayload = {
+                    ...baseProductPayload,
+                    ...(cleanCategories !== undefined ? { categories: cleanCategories } : {}),
+                    ...(cleanProductImages !== undefined ? { productImage: cleanProductImages } : {})
+                };
+                savedProduct = await strapi.documents('api::product.product').create({
+                    data: createPayload
                 });
                 productId = savedProduct.documentId;
             } else {
-                const updateProductData: any = { ...cleanProductData };
-                if (Array.isArray(updateProductData.categories)) {
-                    updateProductData.categories = { set: updateProductData.categories };
-                }
+                const updatePayload = {
+                    ...baseProductPayload,
+                    ...(cleanCategories !== undefined ? { categories: { set: cleanCategories } } : {}),
+                    ...(cleanProductImages !== undefined ? { productImage: { set: cleanProductImages } } : {})
+                };
                 savedProduct = await strapi.documents('api::product.product').update({
-                    documentId: productId,
-                    data: updateProductData
+                    documentId: productId!,
+                    data: updatePayload
                 });
             }
 
-            // 2. Create or Update Variants
-            const currentVariants = await strapi.documents('api::color.color').findMany({
-                filters: { product: { documentId: productId } } as any
-            });
+            // 2. Sincronizar variantes
+            const currentVariants = (await strapi.documents('api::color.color').findMany({
+                filters: { product: { documentId: productId } } as any,
+                populate: ['images', 'colorImage']
+            })) as any[];
 
-            const variantsToKeep = variantsData
-                .filter(v => v.id)
-                .map(v => String(v.id));
-
-            // Delete variants that are no longer in the list and their images
-            const variantsToDelete = currentVariants.filter((cv: any) => 
-                !variantsToKeep.includes(String(cv.documentId)) && !variantsToKeep.includes(String(cv.id))
+            const validIncomingVariants = Array.isArray(variantsData) ? variantsData : [];
+            const incomingIds = new Set(
+                validIncomingVariants.filter((v: any) => v?.id).map((v: any) => String(v.id))
             );
-            for (const v of variantsToDelete) {
-                // Fetch the variant to get attached images
-                const variantWithImages = await strapi.documents('api::color.color').findOne({
-                    documentId: v.documentId,
-                    populate: ['images']
-                }) as any;
 
-                if (variantWithImages && variantWithImages.images) {
-                    const fileService = strapi.plugin('upload').service('upload');
-                    for (const img of variantWithImages.images) {
-                        try {
-                            await fileService.remove(img);
-                        } catch (e) {
-                            console.error("Error deleting orphaned image:", e);
-                        }
+            // Recolectar imágenes aún referenciadas por variantes que permanecen
+            const retainedMediaIds = new Set<number>();
+            for (const v of validIncomingVariants) {
+                if (Array.isArray(v?.images)) {
+                    for (const imgId of v.images) {
+                        const num = Number(imgId);
+                        if (Number.isFinite(num) && num > 0) retainedMediaIds.add(num);
+                    }
+                }
+                if (v?.colorImage) {
+                    const num = Number(v.colorImage);
+                    if (Number.isFinite(num) && num > 0) retainedMediaIds.add(num);
+                }
+            }
+
+            // Eliminar variantes removidas
+            const variantsToDelete = currentVariants.filter(
+                (cv: any) =>
+                    !incomingIds.has(String(cv.documentId)) && !incomingIds.has(String(cv.id))
+            );
+            for (const cv of variantsToDelete) {
+                await deleteVariantWithStockCleanup(
+                    strapi,
+                    cv.documentId,
+                    `Variante eliminada al actualizar "${title}"`,
+                    performedById,
+                    retainedMediaIds
+                );
+            }
+
+            // Crear o actualizar variantes activas
+            for (const variant of validIncomingVariants) {
+                if (!variant) continue;
+
+                const variantName = String(variant.name || '').trim() || 'Estándar';
+                const variantCode = String(variant.code || '000000').replace(/#/g, '').slice(0, 6) || '000000';
+                const vIsDiscounted = Boolean(variant.isDiscounted);
+                const vDiscount = vIsDiscounted
+                    ? Number(Math.min(100, Math.max(0, Number(variant.discount) || 0)).toFixed(2))
+                    : 0;
+
+                const cleanImages = Array.isArray(variant.images)
+                    ? variant.images
+                          .map((img: any) => (typeof img === 'object' ? Number(img?.id) : Number(img)))
+                          .filter((id: number) => Number.isFinite(id) && id > 0)
+                    : undefined;
+
+                let cleanColorImage: number | null | undefined = undefined;
+                if (variant.colorImage === null) {
+                    cleanColorImage = null;
+                } else if (variant.colorImage !== undefined) {
+                    const num = typeof variant.colorImage === 'object'
+                        ? Number(variant.colorImage?.id)
+                        : Number(variant.colorImage);
+                    if (Number.isFinite(num) && num > 0) {
+                        cleanColorImage = num;
                     }
                 }
 
-                await strapi.documents('api::color.color').delete({ documentId: v.documentId });
-            }
+                if (variant.id) {
+                    // Verificar que la variante pertenezca a este producto (anti-IDOR)
+                    const matchedExisting = currentVariants.find(
+                        (cv: any) =>
+                            String(cv.documentId) === String(variant.id) ||
+                            String(cv.id) === String(variant.id)
+                    );
+                    if (!matchedExisting) {
+                        throw new Error(`La variante "${variantName}" no pertenece a este producto.`);
+                    }
 
-            // Create or Update
-            if (variantsData && Array.isArray(variantsData) && variantsData.length > 0) {
-                for (const variant of variantsData) {
-                    if (variant.id) {
-                        const { id, images, ...dataToUpdate } = variant;
-                        const updateData: any = { ...dataToUpdate };
-                        
-                        if (updateData.code) {
-                            updateData.code = String(updateData.code).replace(/#/g, '').slice(0, 6) || '000000';
-                        }
-                        if (updateData.name) {
-                            updateData.name = String(updateData.name).trim() || 'Estándar';
-                        }
-                        if (updateData.stock !== undefined) {
-                            updateData.stock = Number(updateData.stock) || 0;
-                        }
+                    // No sobrescribir `stock` en variantes existentes para no perder movimientos concurrentes
+                    const updateData: any = {
+                        name: variantName,
+                        code: variantCode,
+                        isDiscounted: vIsDiscounted,
+                        discount: vDiscount,
+                        ...(cleanImages !== undefined ? { images: { set: cleanImages } } : {}),
+                        ...(cleanColorImage !== undefined ? { colorImage: cleanColorImage } : {})
+                    };
 
-                        if (images !== undefined) {
-                            const cleanImages = Array.isArray(images) 
-                                ? images.filter(img => img !== null && img !== undefined && img !== '')
-                                : images;
-                            updateData.images = Array.isArray(cleanImages) ? { set: cleanImages } : cleanImages;
-                        }
+                    await strapi.documents('api::color.color').update({
+                        documentId: matchedExisting.documentId,
+                        data: updateData
+                    });
+                } else {
+                    const initialStock = Math.max(0, Number(variant.stock) || 0);
+                    const targetWhDocId =
+                        initialStock > 0
+                            ? await resolveTargetWarehouseDocId(strapi, variant.initialWarehouseId)
+                            : null;
 
-                        let targetVariantDocId = String(variant.id);
-                        if (!isNaN(Number(targetVariantDocId))) {
-                            const foundColor = await strapi.documents('api::color.color').findFirst({
-                                filters: { id: Number(targetVariantDocId) } as any
-                            });
-                            if (foundColor) {
-                                targetVariantDocId = foundColor.documentId;
-                            }
-                        }
+                    // Si hay almacén, crear la variante con stock: 0 para que el movimiento IN inicial
+                    // genere warehouse_stock + historial de movimientos + stock agregado sin doble conteo
+                    const createData: any = {
+                        product: productId,
+                        name: variantName,
+                        code: variantCode,
+                        stock: initialStock > 0 && !targetWhDocId ? initialStock : 0,
+                        isDiscounted: vIsDiscounted,
+                        discount: vDiscount,
+                        ...(cleanImages !== undefined ? { images: cleanImages } : {}),
+                        ...(cleanColorImage ? { colorImage: cleanColorImage } : {})
+                    };
 
-                        await strapi.documents('api::color.color').update({
-                            documentId: targetVariantDocId,
-                            data: updateData
-                        });
-                    } else {
-                        const { id, images, ...dataToCreate } = variant;
-                        const createData: any = { ...dataToCreate, product: productId };
-                        
-                        if (createData.code) {
-                            createData.code = String(createData.code).replace(/#/g, '').slice(0, 6) || '000000';
-                        }
-                        if (createData.name) {
-                            createData.name = String(createData.name).trim() || 'Estándar';
-                        }
-                        if (createData.stock !== undefined) {
-                            createData.stock = Number(createData.stock) || 0;
-                        }
+                    const createdColor = await strapi.documents('api::color.color').create({
+                        data: createData
+                    });
+                    createdVariantDocIds.push(createdColor.documentId);
 
-                        if (images !== undefined) {
-                            const cleanImages = Array.isArray(images) 
-                                ? images.filter(img => img !== null && img !== undefined && img !== '')
-                                : images;
-                            createData.images = cleanImages;
-                        }
-
-                        await strapi.documents('api::color.color').create({
-                            data: createData
+                    if (initialStock > 0 && targetWhDocId) {
+                        await strapi.documents('api::inventory-movement.inventory-movement').create({
+                            data: {
+                                type: 'IN',
+                                quantity: initialStock,
+                                color: createdColor.documentId,
+                                product: productId,
+                                warehouse: targetWhDocId,
+                                reason: `Stock inicial de catálogo: ${title} (${variantName})`,
+                                date: new Date().toISOString(),
+                                ...(performedById ? { performedBy: performedById } : {})
+                            } as any
                         });
                     }
                 }
@@ -196,15 +513,73 @@ export default factories.createCoreController('api::product.product', ({ strapi 
             return ctx.send({ success: true, data: savedProduct });
         } catch (error: any) {
             console.error('[saveFull Error]:', error);
-            // Rollback only if it was a new product creation
-            if (isNewProduct && savedProduct && savedProduct.documentId) {
+
+            // Rollback limpio si falló durante creación inicial
+            if (isNewProduct && savedProduct?.documentId) {
+                for (const createdColorDocId of createdVariantDocIds) {
+                    try {
+                        await deleteVariantWithStockCleanup(
+                            strapi,
+                            createdColorDocId,
+                            'Rollback de creación de producto'
+                        );
+                    } catch (rollbackColorErr) {
+                        console.error('Error rolling back variant:', rollbackColorErr);
+                    }
+                }
                 try {
-                    await strapi.documents('api::product.product').delete({ documentId: savedProduct.documentId });
-                } catch (e) {
-                    console.error("Rollback failed:", e);
+                    await strapi.documents('api::product.product').delete({
+                        documentId: savedProduct.documentId
+                    });
+                } catch (rollbackProdErr) {
+                    console.error('Rollback failed:', rollbackProdErr);
                 }
             }
-            return ctx.badRequest('Error saving product and variants: ' + (error.message || error));
+
+            return ctx.badRequest('Error guardando producto y variantes: ' + (error?.message || error));
+        }
+    },
+
+    async deleteAdmin(ctx) {
+        try {
+            const targetDocId = await resolveDocumentId(strapi, 'api::product.product', ctx.params.id);
+            if (!targetDocId) {
+                return ctx.notFound('Producto no encontrado');
+            }
+
+            const product = (await strapi.documents('api::product.product').findOne({
+                documentId: targetDocId,
+                populate: {
+                    productImage: true,
+                    colors: true
+                }
+            })) as any;
+
+            if (!product) {
+                return ctx.notFound('Producto no encontrado');
+            }
+
+            const performedById = ctx.state?.user?.documentId || ctx.state?.user?.id || null;
+            const colors = Array.isArray(product.colors) ? product.colors : [];
+
+            for (const color of colors) {
+                if (color?.documentId) {
+                    await deleteVariantWithStockCleanup(
+                        strapi,
+                        color.documentId,
+                        `Producto eliminado del catálogo: "${product.title}" (${color.name || 'Estándar'})`,
+                        performedById
+                    );
+                }
+            }
+
+            await removeMediaFilesSafely(strapi, product.productImage);
+            await strapi.documents('api::product.product').delete({ documentId: targetDocId });
+
+            return ctx.send({ success: true, data: { documentId: targetDocId } });
+        } catch (error: any) {
+            console.error('[deleteAdmin Error]:', error);
+            return ctx.internalServerError('Error eliminando producto: ' + (error?.message || error));
         }
     },
 

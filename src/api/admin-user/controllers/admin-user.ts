@@ -1,3 +1,59 @@
+import crypto from 'crypto';
+
+async function generateAndSendInvite(strapi: any, user: any, rawAdminUrl?: string, originHeader?: string) {
+  const nonce = crypto.randomBytes(24).toString('hex');
+
+  await strapi.db.query('plugin::users-permissions.user').update({
+    where: { id: user.id },
+    data: { resetPasswordToken: nonce },
+  });
+
+  const inviteToken = strapi
+    .plugin('users-permissions')
+    .service('jwt')
+    .issue({ id: user.id, purpose: 'set-password', nonce }, { expiresIn: '48h' });
+
+  const baseUrl = (rawAdminUrl || originHeader || process.env.ADMIN_URL || 'http://localhost:4321').replace(/\/$/, '');
+  const inviteUrl = `${baseUrl}/set-password?token=${encodeURIComponent(inviteToken)}`;
+
+  let emailSent = false;
+  try {
+    await strapi.plugin('email').service('email').send({
+      to: user.email,
+      from: process.env.SMTP_DEFAULT_FROM,
+      subject: 'Invitación al Panel de Administración — Configura tu contraseña',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+          <h2 style="color: #4f46e5; margin-top: 0;">¡Hola, ${user.username}!</h2>
+          <p style="font-size: 15px; color: #334155; line-height: 1.6;">
+            Has sido invitado(a) a formar parte del equipo en el Panel de Administración. Para activar tu acceso, establece tu contraseña personal usando el siguiente enlace seguro:
+          </p>
+
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${inviteUrl}" style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 15px; padding: 12px 24px; border-radius: 8px;">
+              Establecer mi Contraseña
+            </a>
+          </div>
+
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 14px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0 0 6px 0; font-size: 13px; color: #475569;"><strong>Usuario / Correo:</strong> ${user.email}</p>
+            <p style="margin: 0; font-size: 12px; color: #64748b; word-break: break-all;">Si el botón no funciona, copia y pega este enlace en tu navegador:<br/>${inviteUrl}</p>
+          </div>
+
+          <p style="font-size: 13px; color: #64748b; line-height: 1.5; margin-bottom: 0;">
+            <em>Por seguridad, este enlace temporal es de un solo uso y expirará en 48 horas.</em>
+          </p>
+        </div>
+      `,
+    });
+    emailSent = true;
+  } catch (emailErr: any) {
+    console.error('No se pudo enviar el correo de invitación:', emailErr.message || emailErr);
+  }
+
+  return { inviteUrl, emailSent };
+}
+
 export default {
   async getUsers(ctx: any) {
     try {
@@ -16,7 +72,10 @@ export default {
       // Remove sensitive fields like password before sending
       const sanitizedUsers = users.map((u: any) => {
         const { password, resetPasswordToken, confirmationToken, ...safeUser } = u;
-        return safeUser;
+        return {
+          ...safeUser,
+          pendingInvite: Boolean(resetPasswordToken),
+        };
       });
 
       return ctx.send({ users: sanitizedUsers });
@@ -26,10 +85,10 @@ export default {
   },
 
   async createUser(ctx: any) {
-    const { username, email, password, role } = ctx.request.body;
+    const { username, email, password, role, adminUrl } = ctx.request.body;
 
-    if (!username || !email || !password || !role) {
-      return ctx.badRequest('Faltan campos obligatorios (username, email, password, role).');
+    if (!username || !email || !role) {
+      return ctx.badRequest('Faltan campos obligatorios (username, email, role).');
     }
 
     try {
@@ -44,51 +103,73 @@ export default {
         return ctx.badRequest('Ya existe un usuario con ese correo electrónico o nombre de usuario.');
       }
 
-      // We use the plugin service so that it hashes the password properly
+      // If no password is provided, generate a high-entropy placeholder until the user sets their own via invite link
+      const initialPassword =
+        password && String(password).trim().length >= 6
+          ? String(password)
+          : crypto.randomBytes(24).toString('hex') + 'A1!';
+
       const newUser = await strapi.plugin('users-permissions').service('user').add({
-        username,
-        email: email.toLowerCase(),
-        password,
+        username: username.trim(),
+        email: email.toLowerCase().trim(),
+        password: initialPassword,
         role,
-        confirmed: true, // Auto confirm for admin created users
+        confirmed: true,
         provider: 'local'
       });
 
-      // Send Welcome Email
-      try {
-        await strapi.plugin('email').service('email').send({
-          to: newUser.email,
-          from: process.env.SMTP_DEFAULT_FROM,
-          subject: '¡Bienvenido al Panel de Administración!',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-              <h2 style="color: #4f46e5; margin-top: 0;">¡Hola, ${newUser.username}!</h2>
-              <p style="font-size: 16px; color: #334155; line-height: 1.6;">
-                Te han creado una cuenta de administrador en el sistema. Ya puedes acceder al panel de control para gestionar la tienda.
-              </p>
-              
-              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; border-radius: 8px; margin: 24px 0;">
-                <p style="margin: 0 0 8px 0; font-size: 14px; color: #64748b; font-weight: bold; text-transform: uppercase;">Tus Credenciales de Acceso:</p>
-                <p style="margin: 0 0 4px 0; font-size: 15px; color: #0f172a;"><strong>Correo:</strong> ${newUser.email}</p>
-                <p style="margin: 0; font-size: 15px; color: #0f172a;"><strong>Contraseña:</strong> ${password}</p>
-              </div>
-
-              <p style="font-size: 14px; color: #64748b; line-height: 1.6; margin-bottom: 0;">
-                <em>Recomendación de Seguridad: Guarda este correo o memoriza tu contraseña. En tu primer inicio de sesión, te sugerimos cambiarla por una propia.</em>
-              </p>
-            </div>
-          `,
-        });
-      } catch (emailErr: any) {
-        console.error('No se pudo enviar el correo de bienvenida:', emailErr.message || emailErr);
-      }
+      const { inviteUrl, emailSent } = await generateAndSendInvite(
+        strapi,
+        newUser,
+        adminUrl,
+        ctx.request.header?.origin
+      );
 
       // Remove sensitive info
-      const { password: _p, ...safeUser } = newUser;
+      const { password: _p, resetPasswordToken: _r, confirmationToken: _c, ...safeUser } = newUser;
 
-      return ctx.send({ message: 'Usuario creado exitosamente.', user: safeUser });
+      return ctx.send({
+        message: emailSent
+          ? 'Usuario creado e invitación enviada por correo.'
+          : 'Usuario creado. Copia el enlace temporal de invitación para enviárselo.',
+        user: { ...safeUser, pendingInvite: true },
+        inviteUrl,
+        emailSent,
+      });
     } catch (err: any) {
       return ctx.badRequest(err.message || 'Error al crear el usuario.');
+    }
+  },
+
+  async sendInvite(ctx: any) {
+    const { id } = ctx.params;
+    const { adminUrl } = ctx.request.body || {};
+
+    try {
+      const user: any = await strapi.entityService.findOne('plugin::users-permissions.user', id, {
+        populate: ['role'],
+      });
+
+      if (!user) {
+        return ctx.notFound('Usuario no encontrado.');
+      }
+
+      const { inviteUrl, emailSent } = await generateAndSendInvite(
+        strapi,
+        user,
+        adminUrl,
+        ctx.request.header?.origin
+      );
+
+      return ctx.send({
+        message: emailSent
+          ? 'Invitación reenviada por correo exitosamente.'
+          : 'Enlace temporal generado. Cópialo para compartirlo con el usuario.',
+        inviteUrl,
+        emailSent,
+      });
+    } catch (err: any) {
+      return ctx.badRequest(err.message || 'Error al generar la invitación.');
     }
   },
 

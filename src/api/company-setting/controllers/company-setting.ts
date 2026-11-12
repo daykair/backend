@@ -55,6 +55,7 @@ const EMPTY_LOGISTICS_SETTINGS = {
 
 const EMPTY_OPERATIONAL_SETTINGS = {
   lowStockThreshold: 5,
+  enableWeighedProducts: false,
   abandonedOrderHours: 24,
   layawayWarningDays: 20,
   layawayExpiredDays: 30,

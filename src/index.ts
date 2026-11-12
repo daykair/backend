@@ -105,7 +105,8 @@ export default {
       console.error('[Migration] Error crítico en la migración de inventarios:', err.message);
     }
 
-    // 3. Asegurar permisos de subida de archivos (upload) para roles autorizados
+    // 3. Asegurar permisos de subida de archivos (upload) exclusivamente para el rol 'admin'
+    //    y revocar permisos de upload que hayan quedado expuestos en roles públicos/clientes.
     try {
       const uploadActions = [
         'plugin::upload.content-api.upload',
@@ -113,27 +114,43 @@ export default {
         'plugin::upload.content-api.findOne',
         'plugin::upload.content-api.destroy'
       ];
+      const restrictedRoleTypes = ['public', 'client', 'cliente', 'customer', 'authenticated'];
       const roles = await strapi.db.query('plugin::users-permissions.role').findMany();
+
       if (roles && Array.isArray(roles)) {
         for (const role of roles) {
-          // No permitir a usuarios anónimos/públicos por seguridad
-          if (role.type === 'public') continue;
+          const roleType = String(role.type || role.name || '').toLowerCase();
 
-          for (const action of uploadActions) {
-            const existingPerm = await strapi.db.query('plugin::users-permissions.permission').findOne({
-              where: { role: role.id, action }
+          // Revocar permisos de upload si estaban asignados a roles no administrativos
+          if (restrictedRoleTypes.includes(roleType)) {
+            await strapi.db.query('plugin::users-permissions.permission').deleteMany({
+              where: {
+                role: role.id,
+                action: { $in: uploadActions }
+              }
             });
-            if (!existingPerm) {
-              await strapi.db.query('plugin::users-permissions.permission').create({
-                data: { action, role: role.id }
+            continue;
+          }
+
+          // Conceder de forma automática únicamente al rol maestro 'admin'
+          // (los demás roles personalizados los gestionan desde la Matriz de Permisos)
+          if (roleType === 'admin') {
+            for (const action of uploadActions) {
+              const existingPerm = await strapi.db.query('plugin::users-permissions.permission').findOne({
+                where: { role: role.id, action }
               });
-              console.log(`[Bootstrap Permissions] Concedido permiso "${action}" al rol "${role.name || role.type}" (ID: ${role.id})`);
+              if (!existingPerm) {
+                await strapi.db.query('plugin::users-permissions.permission').create({
+                  data: { action, role: role.id }
+                });
+                console.log(`[Bootstrap Permissions] Concedido permiso "${action}" al rol admin (ID: ${role.id})`);
+              }
             }
           }
         }
       }
     } catch (err: any) {
-      console.error('[Bootstrap Permissions] Error al asegurar permisos de subida:', err.message);
+      console.error('[Bootstrap Permissions] Error al sincronizar permisos de subida:', err.message);
     }
 
     // 4. Programar la rutina diaria de raspado a las 12:00 AM (Medianoche) Hora de Caracas

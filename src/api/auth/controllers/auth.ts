@@ -251,4 +251,82 @@ export default {
       return ctx.badRequest(err.message || 'No se pudo cambiar la contraseña.');
     }
   },
+
+  async verifyInvite(ctx: any) {
+    const token = ctx.request.query?.token;
+    if (!token || typeof token !== 'string') {
+      return ctx.badRequest('Enlace de invitación no válido.');
+    }
+
+    try {
+      const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
+      if (!decoded?.id || decoded.purpose !== 'set-password' || !decoded.nonce) {
+        return ctx.badRequest('El enlace de invitación es inválido o ha expirado.');
+      }
+
+      const user = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { id: decoded.id },
+        populate: ['role'],
+      });
+
+      if (!user || user.blocked) {
+        return ctx.badRequest('La cuenta asociada no está disponible.');
+      }
+
+      if (!user.resetPasswordToken || user.resetPasswordToken !== decoded.nonce) {
+        return ctx.badRequest('Este enlace ya fue utilizado o ha sido reemplazado por uno nuevo.');
+      }
+
+      return ctx.send({
+        valid: true,
+        username: user.username,
+        email: user.email,
+        roleName: user.role?.name || 'Equipo',
+      });
+    } catch (err: any) {
+      return ctx.badRequest('El enlace temporal ha expirado o no es válido.');
+    }
+  },
+
+  async completeInvite(ctx: any) {
+    const { token, password } = ctx.request.body || {};
+    if (!token || !password) {
+      return ctx.badRequest('Faltan datos para establecer la contraseña.');
+    }
+    if (typeof password !== 'string' || password.length < 6) {
+      return ctx.badRequest('La contraseña debe tener al menos 6 caracteres.');
+    }
+
+    try {
+      const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
+      if (!decoded?.id || decoded.purpose !== 'set-password' || !decoded.nonce) {
+        return ctx.badRequest('El enlace de invitación es inválido o ha expirado.');
+      }
+
+      const user = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { id: decoded.id },
+      });
+
+      if (!user || user.blocked) {
+        return ctx.badRequest('La cuenta asociada no está disponible.');
+      }
+
+      if (!user.resetPasswordToken || user.resetPasswordToken !== decoded.nonce) {
+        return ctx.badRequest('Este enlace ya fue utilizado anteriormente.');
+      }
+
+      await strapi.plugin('users-permissions').service('user').edit(user.id, {
+        password,
+        resetPasswordToken: null,
+        confirmed: true,
+      });
+
+      return ctx.send({
+        ok: true,
+        message: 'Contraseña establecida exitosamente. Ya puedes iniciar sesión.',
+      });
+    } catch (err: any) {
+      return ctx.badRequest('El enlace temporal ha expirado o no es válido.');
+    }
+  },
 };

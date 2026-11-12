@@ -65,7 +65,29 @@ export default {
                 policies: [
                     {
                         name: 'global::is-admin',
-                        config: { permission: ['api::product.product.create', 'api::product.product.update', 'api::company-setting.company-setting.update'] }
+                        config: {
+                            permission: [
+                                'api::product.product.create',
+                                'api::product.product.update',
+                                'api::category.category.create',
+                                'api::category.category.update',
+                                'api::company-setting.company-setting.update'
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            method: 'DELETE',
+            path: '/products-admin/:id',
+            handler: 'api::product.product.deleteAdmin',
+            config: {
+                auth: false,
+                policies: [
+                    {
+                        name: 'global::is-admin',
+                        config: { permission: 'api::product.product.delete' }
                     }
                 ]
             }

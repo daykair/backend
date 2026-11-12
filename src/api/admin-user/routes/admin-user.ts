@@ -23,6 +23,17 @@ export default {
       }
     },
     {
+      method: 'POST',
+      path: '/admin-users/:id/invite',
+      handler: 'admin-user.sendInvite',
+      config: {
+        auth: false,
+        policies: [
+          { name: 'global::is-admin', config: { permission: ['plugin::users-permissions.user.create', 'plugin::users-permissions.user.update'] } }
+        ]
+      }
+    },
+    {
       method: 'PUT',
       path: '/admin-users/:id',
       handler: 'admin-user.updateUser',

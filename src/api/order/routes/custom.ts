@@ -48,7 +48,12 @@ export default {
       handler: 'api::order.order.casheaWebhook',
       config: {
         auth: false,
-        policies: ['global::is-admin'],
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { permission: 'api::order.order.update' },
+          },
+        ],
       },
     },
     {

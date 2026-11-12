@@ -31,6 +31,22 @@ export default {
       config: {
         auth: false,
       }
+    },
+    {
+      method: 'GET',
+      path: '/auth/verify-invite',
+      handler: 'api::auth.auth.verifyInvite',
+      config: {
+        auth: false,
+      }
+    },
+    {
+      method: 'POST',
+      path: '/auth/complete-invite',
+      handler: 'api::auth.auth.completeInvite',
+      config: {
+        auth: false,
+      }
     }
   ]
 };
