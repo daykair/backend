@@ -329,4 +329,196 @@ export default {
       return ctx.badRequest('El enlace temporal ha expirado o no es válido.');
     }
   },
+
+  async customerLogin(ctx: any) {
+    const { identifier, password } = ctx.request.body || {};
+    if (!identifier || !password) {
+      return ctx.badRequest('Ingresa tu correo/usuario y contraseña.');
+    }
+
+    try {
+      const bcrypt = require('bcryptjs');
+      const cleanId = String(identifier).trim();
+      let user = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { email: cleanId.toLowerCase() },
+        populate: ['role'],
+      });
+      if (!user) {
+        user = await strapi.db.query('plugin::users-permissions.user').findOne({
+          where: { username: cleanId },
+          populate: ['role'],
+        });
+      }
+
+      if (!user) {
+        await bcrypt.compare(password, '$2a$10$wTf2iR0H.P2b3wR5Vb.JbO1kO.2TfP7P7.E1V1r3V.7X.Y.a1T.f2');
+        return ctx.unauthorized('Credenciales inválidas.');
+      }
+
+      const valid = await bcrypt.compare(password, user.password);
+      if (!valid) {
+        return ctx.unauthorized('Credenciales inválidas.');
+      }
+
+      if (user.blocked) {
+        return ctx.forbidden('Tu cuenta ha sido suspendida. Contacta con soporte.');
+      }
+
+      const jwt = await strapi.plugin('users-permissions').service('jwt').issue({ id: user.id });
+
+      return ctx.send({
+        jwt,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          phone: user.phone || '',
+          fullname: user.fullname || user.name || '',
+        },
+      });
+    } catch (err: any) {
+      strapi.log.error('customerLogin error', err);
+      return ctx.badRequest(err?.message || 'No se pudo iniciar sesión.');
+    }
+  },
+
+  async customerRegister(ctx: any) {
+    const { fullname, name, email, phone, password } = ctx.request.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanName = String(fullname || name || '').trim();
+    const cleanPhone = String(phone || '').trim();
+    const cleanPassword = String(password || '');
+
+    if (cleanName.length < 2) {
+      return ctx.badRequest('Ingresa tu nombre completo.');
+    }
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail) || cleanEmail.endsWith('@cliente.local')) {
+      return ctx.badRequest('Ingresa un correo electrónico válido.');
+    }
+    if (cleanPhone.replace(/\D/g, '').length < 7) {
+      return ctx.badRequest('Ingresa un número de teléfono válido.');
+    }
+    if (cleanPassword.length < 6) {
+      return ctx.badRequest('La contraseña debe tener al menos 6 caracteres.');
+    }
+
+    try {
+      const existingEmail = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { email: cleanEmail },
+        select: ['id'],
+      });
+      if (existingEmail) {
+        return ctx.badRequest('Ya existe una cuenta registrada con este correo.');
+      }
+
+      let clientRole = await strapi.db.query('plugin::users-permissions.role').findOne({
+        where: { type: 'client' },
+        select: ['id'],
+      });
+      if (!clientRole) {
+        clientRole = await strapi.db.query('plugin::users-permissions.role').findOne({
+          where: { type: 'authenticated' },
+          select: ['id'],
+        });
+      }
+      if (!clientRole) {
+        return ctx.internalServerError('No hay rol de cliente configurado en el sistema.');
+      }
+
+      const baseUsername =
+        cleanEmail
+          .split('@')[0]
+          .replace(/[^a-zA-Z0-9._-]/g, '')
+          .slice(0, 24) || 'cliente';
+      let username = baseUsername;
+      const usernameExists = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { username },
+        select: ['id'],
+      });
+      if (usernameExists) {
+        username = `${baseUsername}-${crypto.randomBytes(2).toString('hex')}`;
+      }
+
+      const newUser = await strapi.plugin('users-permissions').service('user').add({
+        username,
+        email: cleanEmail,
+        password: cleanPassword,
+        phone: cleanPhone,
+        fullname: cleanName,
+        name: cleanName,
+        role: clientRole.id,
+        confirmed: true,
+        blocked: false,
+        provider: 'local',
+      });
+
+      // Vincular órdenes previas hechas como invitado con este mismo correo
+      const priorOrders: any[] = await strapi.db.query('api::order.order').findMany({
+        where: { email: cleanEmail },
+        populate: ['customer'],
+      });
+      for (const ord of priorOrders) {
+        const custEmail = String(ord?.customer?.email || '').toLowerCase();
+        if (!ord.customer || custEmail.endsWith('@cliente.local')) {
+          await strapi.db.query('api::order.order').update({
+            where: { id: ord.id },
+            data: { customer: newUser.id },
+          });
+        }
+      }
+
+      const jwt = await strapi.plugin('users-permissions').service('jwt').issue({ id: newUser.id });
+
+      return ctx.send({
+        jwt,
+        user: {
+          id: newUser.id,
+          username: newUser.username,
+          email: newUser.email,
+          phone: newUser.phone || cleanPhone,
+          fullname: newUser.fullname || cleanName,
+        },
+      });
+    } catch (err: any) {
+      strapi.log.error('customerRegister error', err);
+      return ctx.badRequest(err?.message || 'No se pudo completar el registro.');
+    }
+  },
+
+  async customerMe(ctx: any) {
+    try {
+      const authHeader = String(ctx.request.header?.authorization || '');
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const cookieToken = ctx.cookies?.get('store_customer_jwt') || '';
+      const token = bearer || cookieToken;
+      if (!token) {
+        return ctx.unauthorized('No autenticado.');
+      }
+
+      const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token).catch(() => null);
+      if (!decoded?.id) {
+        return ctx.unauthorized('Sesión inválida o expirada.');
+      }
+
+      const user = await strapi.db.query('plugin::users-permissions.user').findOne({
+        where: { id: decoded.id },
+        select: ['id', 'username', 'email', 'phone', 'fullname', 'name', 'blocked'],
+      });
+      if (!user || user.blocked) {
+        return ctx.unauthorized('Cuenta no disponible.');
+      }
+
+      return ctx.send({
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          phone: user.phone || '',
+          fullname: user.fullname || user.name || '',
+        },
+      });
+    } catch (err: any) {
+      return ctx.unauthorized('No autenticado.');
+    }
+  },
 };

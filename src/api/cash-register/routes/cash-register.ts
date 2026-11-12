@@ -1,56 +1,11 @@
-/**
- * cash-register router
- *
- * Ruta custom que permite al rol 'authenticated' (vendedores)
- * crear y listar cierres de caja, además del rol 'admin'.
- */
+import { factories } from '@strapi/strapi';
 
-export default {
-    routes: [
-        {
-            method: 'GET',
-            path: '/cash-registers',
-            handler: 'cash-register.find',
-            config: {
-                policies: [],
-                middlewares: [],
-            },
-        },
-        {
-            method: 'GET',
-            path: '/cash-registers/:id',
-            handler: 'cash-register.findOne',
-            config: {
-                policies: [],
-                middlewares: [],
-            },
-        },
-        {
-            method: 'POST',
-            path: '/cash-registers',
-            handler: 'cash-register.create',
-            config: {
-                policies: [],
-                middlewares: [],
-            },
-        },
-        {
-            method: 'PUT',
-            path: '/cash-registers/:id',
-            handler: 'cash-register.update',
-            config: {
-                policies: [],
-                middlewares: [],
-            },
-        },
-        {
-            method: 'DELETE',
-            path: '/cash-registers/:id',
-            handler: 'cash-register.delete',
-            config: {
-                policies: [],
-                middlewares: [],
-            },
-        },
-    ],
-};
+export default factories.createCoreRouter('api::cash-register.cash-register', {
+  config: {
+    find: { policies: ['global::is-admin'] },
+    findOne: { policies: ['global::is-admin'] },
+    create: { policies: ['global::is-admin'] },
+    update: { policies: ['global::is-admin'] },
+    delete: { policies: ['global::is-admin'] },
+  },
+});

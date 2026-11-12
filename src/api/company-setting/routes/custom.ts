@@ -2,6 +2,14 @@ export default {
   routes: [
     {
       method: 'GET',
+      path: '/company-setting-public',
+      handler: 'api::company-setting.company-setting.getPublicSettings',
+      config: {
+        auth: false,
+      },
+    },
+    {
+      method: 'GET',
       path: '/company-setting-admin',
       handler: 'api::company-setting.company-setting.getAdminSettings',
       config: {

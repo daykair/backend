@@ -8,13 +8,17 @@
     "description": "Daily cash register closings"
   },
   "options": {
-    "draftAndPublish": true
+    "draftAndPublish": false
   },
   "pluginOptions": {},
   "attributes": {
     "date": {
       "type": "date",
       "required": true
+    },
+    "openingBalance": {
+      "type": "decimal",
+      "default": 0
     },
     "totalIncome": {
       "type": "decimal",
@@ -41,6 +45,16 @@
     },
     "breakdown": {
       "type": "json"
+    },
+    "performedBy": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "plugin::users-permissions.user"
+    },
+    "warehouse": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::warehouse.warehouse"
     }
   }
 }

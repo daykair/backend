@@ -46,6 +46,7 @@ const EMPTY_LOGISTICS_SETTINGS = {
   enablePickupWeb: false,
   enableDeliveryWeb: true,
   enableNationalShippingWeb: true,
+  webWarehouseId: null as string | null,
   deliveryZonesText: '',
   deliveryNoteText: '',
   defaultDeliveryCost: 0,
@@ -70,6 +71,48 @@ const EMPTY_OPERATIONAL_SETTINGS = {
 export default factories.createCoreController(
   'api::company-setting.company-setting' as any,
   ({ strapi }) => ({
+    async getPublicSettings(ctx: any) {
+      try {
+        const dbQuery = (strapi.db as any).query('api::company-setting.company-setting');
+        const setting = await dbQuery.findOne({
+          populate: ['logo', 'favicon'],
+        });
+
+        if (!setting) {
+          return ctx.send({ data: null });
+        }
+
+        return ctx.send({
+          data: {
+            commercialName: setting.commercialName || '',
+            businessName: setting.businessName || '',
+            phone: setting.phone || '',
+            email: setting.email || '',
+            address: setting.address || '',
+            instagram: setting.instagram || '',
+            logo: setting.logo || null,
+            favicon: setting.favicon || null,
+            paymentSettings: setting.paymentSettings || EMPTY_PAYMENT_SETTINGS,
+            bannerSettings: setting.bannerSettings || EMPTY_BANNER_SETTINGS,
+            logisticsSettings: setting.logisticsSettings || EMPTY_LOGISTICS_SETTINGS,
+            operationalSettings: {
+              lowStockThreshold: Number(
+                setting.operationalSettings?.lowStockThreshold ??
+                  EMPTY_OPERATIONAL_SETTINGS.lowStockThreshold,
+              ),
+              enableWeighedProducts: Boolean(
+                setting.operationalSettings?.enableWeighedProducts ??
+                  EMPTY_OPERATIONAL_SETTINGS.enableWeighedProducts,
+              ),
+            },
+          },
+        });
+      } catch (err: any) {
+        console.error('[CompanySetting] Error en getPublicSettings:', err);
+        ctx.throw(500, err.message || 'Error al obtener la configuración pública');
+      }
+    },
+
     async getAdminSettings(ctx: any) {
       try {
         const dbQuery = (strapi.db as any).query('api::company-setting.company-setting');

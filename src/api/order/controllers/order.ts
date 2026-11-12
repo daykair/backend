@@ -3,8 +3,32 @@
  */
 
 import { factories } from '@strapi/strapi';
+import crypto from 'crypto';
 import * as yup from 'yup';
 import { buildAdminFindParams } from '../../../utils/adminQuery';
+import { userHasExactPermission } from '../../../utils/adminCrud';
+import { sendOrderStatusNotification } from '../utils/publicOrder';
+
+async function resolveCustomerUser(strapi: any, ctx: any) {
+  const authHeader = String(ctx.request.header?.authorization || '');
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const cookieToken = ctx.cookies?.get('store_customer_jwt') || '';
+  const token = bearer || cookieToken;
+  if (!token) return null;
+
+  try {
+    const decoded = await strapi.plugin('users-permissions').service('jwt').verify(token);
+    if (!decoded?.id) return null;
+    const user = await strapi.db.query('plugin::users-permissions.user').findOne({
+      where: { id: decoded.id },
+      select: ['id', 'blocked'],
+    });
+    if (!user || user.blocked) return null;
+    return user;
+  } catch {
+    return null;
+  }
+}
 
 const orderLineItemSchema = yup.object({
   productId: yup.mixed().required(),
@@ -186,6 +210,15 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
         populate: ['customer', 'performedBy', 'dispatchWarehouse', 'referenceImage'],
       });
 
+      if (updateData.orderStatus === 'payment_confirmed') {
+        void sendOrderStatusNotification(
+          strapi,
+          updatedOrder,
+          'payment_confirmed',
+          order.orderStatus,
+        );
+      }
+
       return ctx.send({ data: updatedOrder });
     } catch (err: any) {
       console.error('[OrderProcess] Error en addPayment:', err);
@@ -202,11 +235,19 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
       const configuredSecret = process.env.CASHEA_PRIVATE_API_KEY || process.env.CASHEA_WEBHOOK_SECRET;
       const authHeader = ctx.request.headers['authorization'] || ctx.request.headers['x-cashea-signature'];
 
-      if (configuredSecret && authHeader) {
-        const cleanHeader = String(authHeader).replace(/^ApiKey\s+/i, '').replace(/^Bearer\s+/i, '').trim();
-        if (cleanHeader !== configuredSecret) {
-          return ctx.unauthorized('Invalid Cashea API Key or signature');
-        }
+      if (!configuredSecret) {
+        return ctx.unauthorized('Cashea webhook secret is not configured');
+      }
+
+      if (!authHeader) {
+        return ctx.unauthorized('Missing Cashea API Key or signature');
+      }
+
+      const cleanHeader = String(authHeader).replace(/^ApiKey\s+/i, '').replace(/^Bearer\s+/i, '').trim();
+      const expectedDigest = crypto.createHash('sha256').update(configuredSecret).digest();
+      const receivedDigest = crypto.createHash('sha256').update(cleanHeader).digest();
+      if (!crypto.timingSafeEqual(expectedDigest, receivedDigest)) {
+        return ctx.unauthorized('Invalid Cashea API Key or signature');
       }
 
       const body = ctx.request.body?.data || ctx.request.body || {};
@@ -345,6 +386,14 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
           documentId: order.documentId,
           data: updateData,
         });
+        if (updateData.orderStatus === 'payment_confirmed') {
+          void sendOrderStatusNotification(
+            strapi,
+            updated,
+            'payment_confirmed',
+            order.orderStatus,
+          );
+        }
         settledOrders.push(updated);
       }
 
@@ -355,6 +404,176 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
     } catch (err: any) {
       console.error('[BatchSettle] Error:', err);
       ctx.throw(500, err.message || 'Error al liquidar órdenes en lote');
+    }
+  },
+
+  /**
+   * Analíticas y KPIs agregados en servidor (soporta daily, weekly, monthly, custom y warehouseId).
+   */
+  async analytics(ctx) {
+    try {
+      const user = ctx.state?.user;
+      const [canViewOrders, canViewExpenses, canViewProducts] = await Promise.all([
+        userHasExactPermission(strapi, user, 'api::order.order.find'),
+        userHasExactPermission(strapi, user, 'api::expense.expense.find'),
+        userHasExactPermission(strapi, user, 'api::product.product.find'),
+      ]);
+
+      const { period, from, to, warehouseId, lowStockThreshold } = (ctx.query || {}) as Record<string, string>;
+      const validPeriod =
+        period === 'daily' || period === 'weekly' || period === 'monthly' || period === 'custom'
+          ? period
+          : 'monthly';
+
+      const summary = await strapi.service('api::order.order').getAnalyticsSummary({
+        period: validPeriod,
+        from,
+        to,
+        warehouseId,
+        lowStockThreshold: lowStockThreshold !== undefined ? Number(lowStockThreshold) : undefined,
+        canViewOrders,
+        canViewExpenses,
+        canViewProducts,
+      });
+
+      return ctx.send({ data: summary });
+    } catch (err: any) {
+      console.error('[OrderAnalytics] Error:', err);
+      ctx.throw(500, err.message || 'Error calculando analíticas');
+    }
+  },
+
+  /**
+   * Procesa la devolución parcial (o remanente completo) de artículos de un pedido,
+   * reingresando stock al almacén correspondiente y ajustando saldo sin anular ítems no devueltos.
+   */
+  async partialReturn(ctx) {
+    try {
+      const { id } = ctx.params;
+      const body = ctx.request.body?.data || ctx.request.body || {};
+      const result = await strapi
+        .service('api::order.order')
+        .processPartialReturn(id, body, ctx.state?.user);
+      return ctx.send({ data: result });
+    } catch (err: any) {
+      console.error('[OrderPartialReturn] Error:', err);
+      if (err?.status === 400) return ctx.badRequest(err.message);
+      if (err?.status === 404) return ctx.notFound(err.message);
+      ctx.throw(500, err.message || 'Error al procesar la devolución parcial');
+    }
+  },
+
+  /**
+   * Retorna alertas operativas consolidadas (pedidos abandonados, apartados por vencer, bajo stock).
+   */
+  async alerts(ctx) {
+    try {
+      const user = ctx.state?.user;
+      const [canViewOrders, canViewProducts] = await Promise.all([
+        userHasExactPermission(strapi, user, 'api::order.order.find'),
+        userHasExactPermission(strapi, user, 'api::product.product.find'),
+      ]);
+
+      const data = await strapi.service('api::order.order').getOperationalAlerts({
+        canViewOrders,
+        canViewProducts,
+      });
+
+      return ctx.send({ data });
+    } catch (err: any) {
+      console.error('[OrderAlerts] Error:', err);
+      ctx.throw(500, err.message || 'Error obteniendo alertas operativas');
+    }
+  },
+
+  /**
+   * Crea una orden pública validando precios, descuentos y disponibilidad en servidor.
+   */
+  async createPublicOrder(ctx) {
+    try {
+      const customerUser = await resolveCustomerUser(strapi, ctx);
+
+      const data = await strapi
+        .service('api::order.order')
+        .createPublicOrderTransaction(ctx.request.body || {}, customerUser);
+      return ctx.send({ data });
+    } catch (err: any) {
+      console.error('[CreatePublicOrder] Error:', err);
+      if (err?.status === 400) return ctx.badRequest(err.message);
+      ctx.throw(500, err.message || 'Error creando el pedido');
+    }
+  },
+
+  /**
+   * Consulta pública sanitizada de un pedido por slug o documentId.
+   */
+  async findPublicBySlug(ctx) {
+    try {
+      const { slug } = ctx.params;
+      const data = await strapi.service('api::order.order').findPublicOrderBySlug(slug);
+      if (!data) {
+        return ctx.notFound('Orden no encontrada');
+      }
+      return ctx.send({ data });
+    } catch (err: any) {
+      console.error('[FindPublicBySlug] Error:', err);
+      ctx.throw(500, err.message || 'Error consultando el pedido');
+    }
+  },
+
+  /**
+   * Rastreo público para invitados verificando código de pedido y teléfono o correo.
+   */
+  async trackPublicOrder(ctx) {
+    try {
+      const body = ctx.request.body?.data || ctx.request.body || {};
+      const data = await strapi
+        .service('api::order.order')
+        .trackPublicOrder(body.slug || body.orderCode || body.code, body.verification);
+      return ctx.send({ data });
+    } catch (err: any) {
+      if (err?.status === 400) return ctx.badRequest(err.message);
+      if (err?.status === 404) return ctx.notFound(err.message);
+      console.error('[TrackPublicOrder] Error:', err);
+      ctx.throw(500, err.message || 'Error rastreando el pedido');
+    }
+  },
+
+  /**
+   * Historial de órdenes del cliente autenticado (portal Mis Pedidos).
+   */
+  async findMyOrders(ctx) {
+    try {
+      const user = await resolveCustomerUser(strapi, ctx);
+      if (!user) {
+        return ctx.unauthorized('Debes iniciar sesión para ver tus pedidos');
+      }
+
+      const data = await strapi.service('api::order.order').findMyCustomerOrders(user.id);
+      return ctx.send({ data });
+    } catch (err: any) {
+      console.error('[FindMyOrders] Error:', err);
+      ctx.throw(500, err.message || 'Error obteniendo tus pedidos');
+    }
+  },
+
+  /**
+   * Recibe referencia e imagen de pago del cliente para órdenes pendientes.
+   */
+  async submitPublicPayment(ctx) {
+    try {
+      const { slug } = ctx.params;
+      const body = ctx.request.body?.data || ctx.request.body || {};
+      const data = await strapi.service('api::order.order').submitPublicOrderPayment(slug, {
+        paymentReference: body.paymentReference,
+        referenceImage: body.referenceImage,
+      });
+      return ctx.send({ data });
+    } catch (err: any) {
+      if (err?.status === 400) return ctx.badRequest(err.message);
+      if (err?.status === 404) return ctx.notFound(err.message);
+      console.error('[SubmitPublicPayment] Error:', err);
+      ctx.throw(500, err.message || 'Error enviando el comprobante');
     }
   },
 }));

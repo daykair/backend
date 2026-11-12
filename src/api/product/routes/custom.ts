@@ -2,6 +2,33 @@ export default {
     routes: [
         {
             method: 'GET',
+            path: '/products-storefront',
+            handler: 'api::product.product.findStorefront',
+            config: {
+                auth: false,
+                policies: []
+            }
+        },
+        {
+            method: 'GET',
+            path: '/products-storefront/color-stock',
+            handler: 'api::product.product.findStorefrontColorStock',
+            config: {
+                auth: false,
+                policies: []
+            }
+        },
+        {
+            method: 'GET',
+            path: '/products-storefront/color-stock/:id',
+            handler: 'api::product.product.findStorefrontColorStock',
+            config: {
+                auth: false,
+                policies: []
+            }
+        },
+        {
+            method: 'GET',
             path: '/products-admin',
             handler: 'api::product.product.findAdmin',
             config: {

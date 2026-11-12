@@ -47,6 +47,30 @@ export default {
       config: {
         auth: false,
       }
+    },
+    {
+      method: 'POST',
+      path: '/auth/customer-login',
+      handler: 'api::auth.auth.customerLogin',
+      config: {
+        auth: false,
+      }
+    },
+    {
+      method: 'POST',
+      path: '/auth/customer-register',
+      handler: 'api::auth.auth.customerRegister',
+      config: {
+        auth: false,
+      }
+    },
+    {
+      method: 'GET',
+      path: '/auth/customer-me',
+      handler: 'api::auth.auth.customerMe',
+      config: {
+        auth: false,
+      }
     }
   ]
 };

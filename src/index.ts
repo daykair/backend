@@ -155,8 +155,69 @@ export default {
 
     // 4. Programar la rutina diaria de raspado a las 12:00 AM (Medianoche) Hora de Caracas
     scheduleDailyBcvUpdate(strapi);
+
+    // 5. Programar chequeo periódico de alertas operativas (pedidos abandonados, apartados, bajo stock)
+    scheduleOperationalAlertsCheck(strapi);
   },
 };
+
+function scheduleOperationalAlertsCheck(strapi: any) {
+  let lastDigestDay = '';
+
+  const runCheck = async () => {
+    try {
+      const alerts = await strapi.service('api::order.order').getOperationalAlerts({
+        canViewOrders: true,
+        canViewProducts: true,
+      });
+
+      const s = alerts.summary;
+      if (s.totalAlerts > 0) {
+        console.log(
+          `[AlertsCron] Resumen operativo: ${s.abandonedCount} pedido(s) abandonado(s), ` +
+            `${s.layawayExpiredCount} apartado(s) vencido(s), ${s.layawayWarningCount} por vencer, ` +
+            `${s.lowStockCount} variante(s) bajo stock.`,
+        );
+
+        const todayKey = new Date().toISOString().split('T')[0];
+        const hasSmtp = Boolean(process.env.SMTP_USERNAME && process.env.SMTP_PASSWORD);
+        if (hasSmtp && alerts.companyEmail && lastDigestDay !== todayKey) {
+          try {
+            await strapi
+              .plugin('email')
+              .service('email')
+              .send({
+                to: alerts.companyEmail,
+                subject: `[${alerts.commercialName}] Alerta operativa (${s.totalAlerts} pendientes)`,
+                html: `
+                  <h2>Resumen de Alertas Operativas — ${alerts.commercialName}</h2>
+                  <ul>
+                    <li><strong>Pedidos web abandonados (&ge;${alerts.thresholds.abandonedOrderHours}h):</strong> ${s.abandonedCount}</li>
+                    <li><strong>Apartados vencidos (&ge;${alerts.thresholds.layawayExpiredDays}d):</strong> ${s.layawayExpiredCount}</li>
+                    <li><strong>Apartados por vencer (&ge;${alerts.thresholds.layawayWarningDays}d):</strong> ${s.layawayWarningCount}</li>
+                    <li><strong>Variantes en bajo stock (&le;${alerts.thresholds.lowStockThreshold}):</strong> ${s.lowStockCount}</li>
+                  </ul>
+                  <p>Ingresa al panel administrativo para gestionar estos pendientes.</p>
+                `,
+              });
+            lastDigestDay = todayKey;
+          } catch (mailErr: any) {
+            console.warn('[AlertsCron] No se pudo enviar resumen por correo:', mailErr?.message || mailErr);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[AlertsCron] Error en chequeo operativo:', err?.message || err);
+    }
+  };
+
+  setTimeout(() => {
+    void runCheck();
+    setInterval(() => {
+      void runCheck();
+    }, 6 * 3600 * 1000);
+  }, 60 * 1000);
+}
 
 function scheduleDailyBcvUpdate(strapi: any) {
   const runUpdate = async () => {

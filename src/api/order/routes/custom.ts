@@ -2,6 +2,34 @@ export default {
   routes: [
     {
       method: 'GET',
+      path: '/orders-admin/alerts',
+      handler: 'api::order.order.alerts',
+      config: {
+        auth: false,
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { allowAnyStaff: true },
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/orders-admin/analytics',
+      handler: 'api::order.order.analytics',
+      config: {
+        auth: false,
+        policies: [
+          {
+            name: 'global::is-admin',
+            config: { allowAnyStaff: true },
+          },
+        ],
+      },
+    },
+    {
+      method: 'GET',
       path: '/orders-admin',
       handler: 'api::order.order.findAdmin',
       config: {
@@ -48,6 +76,60 @@ export default {
       handler: 'api::order.order.casheaWebhook',
       config: {
         auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'POST',
+      path: '/orders-public',
+      handler: 'api::order.order.createPublicOrder',
+      config: {
+        auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'POST',
+      path: '/orders-public/track',
+      handler: 'api::order.order.trackPublicOrder',
+      config: {
+        auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/orders-public/my-orders',
+      handler: 'api::order.order.findMyOrders',
+      config: {
+        auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'GET',
+      path: '/orders-public/:slug',
+      handler: 'api::order.order.findPublicBySlug',
+      config: {
+        auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'PUT',
+      path: '/orders-public/:slug/submit-payment',
+      handler: 'api::order.order.submitPublicPayment',
+      config: {
+        auth: false,
+        policies: [],
+      },
+    },
+    {
+      method: 'POST',
+      path: '/orders-admin/batch-settle',
+      handler: 'api::order.order.batchSettle',
+      config: {
+        auth: false,
         policies: [
           {
             name: 'global::is-admin',
@@ -58,8 +140,8 @@ export default {
     },
     {
       method: 'POST',
-      path: '/orders-admin/batch-settle',
-      handler: 'api::order.order.batchSettle',
+      path: '/orders-admin/:id/partial-return',
+      handler: 'api::order.order.partialReturn',
       config: {
         auth: false,
         policies: [

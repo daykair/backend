@@ -1,7 +1,10 @@
-/**
- * category controller
- */
+import { factories } from '@strapi/strapi';
+import { createAdminCrudHandlers } from '../../../utils/adminCrud';
 
-import { factories } from '@strapi/strapi'
-
-export default factories.createCoreController('api::category.category');
+export default factories.createCoreController('api::category.category', ({ strapi }) =>
+  createAdminCrudHandlers(strapi, 'api::category.category', {
+    defaultPopulate: ['image'],
+    defaultStatus: 'published',
+    forcePublishedStatus: true,
+  }),
+);

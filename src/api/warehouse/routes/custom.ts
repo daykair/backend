@@ -1,5 +1,8 @@
+import { buildAdminRoutes } from '../../../utils/adminCrud';
+
 export default {
   routes: [
+    ...buildAdminRoutes('/warehouses-admin', 'api::warehouse.warehouse'),
     {
       method: 'POST',
       path: '/warehouses/transfer',

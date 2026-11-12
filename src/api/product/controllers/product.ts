@@ -579,23 +579,51 @@ export default factories.createCoreController('api::product.product', ({ strapi 
     },
 
     async validateStock(ctx) {
-        const { items } = ctx.request.body.data || {};
+        const { items, warehouseId: globalWarehouseId } = ctx.request.body.data || {};
         if (!items || !Array.isArray(items)) {
             return ctx.badRequest('Items array is required');
         }
 
+        const resolvedGlobalWhDocId = globalWarehouseId
+            ? await resolveDocumentId(strapi, 'api::warehouse.warehouse', globalWarehouseId)
+            : null;
+        if (globalWarehouseId && !resolvedGlobalWhDocId) {
+            return ctx.badRequest('El almacén seleccionado no existe');
+        }
+
         const errors = [];
         for (const item of items) {
-            const color = await strapi.documents('api::color.color').findOne({
-                documentId: item.colorId
-            });
+            const colorDocId = await resolveDocumentId(strapi, 'api::color.color', item.colorId);
+            const color = colorDocId
+                ? await strapi.documents('api::color.color').findOne({
+                      documentId: colorDocId
+                  })
+                : null;
 
             if (!color) {
                 errors.push(`La variante ${item.selectedColor || ''} del producto ${item.title} ya no existe.`);
                 continue;
             }
 
-            if (Number(color.stock) < Number(item.quantity)) {
+            const itemWhInput = item.warehouseId || globalWarehouseId;
+            const targetWhDocId = item.warehouseId
+                ? await resolveDocumentId(strapi, 'api::warehouse.warehouse', item.warehouseId)
+                : resolvedGlobalWhDocId;
+
+            if (itemWhInput && targetWhDocId) {
+                const whStock = await strapi.documents('api::warehouse-stock.warehouse-stock').findFirst({
+                    filters: {
+                        color: { documentId: color.documentId },
+                        warehouse: { documentId: targetWhDocId }
+                    } as any
+                });
+                const available = Number(whStock?.stock || 0);
+                if (available < Number(item.quantity)) {
+                    errors.push(
+                        `Stock insuficiente en el almacén para ${item.title} (${item.selectedColor || ''}). Pedidos: ${item.quantity}, Disponibles: ${available}.`
+                    );
+                }
+            } else if (Number(color.stock) < Number(item.quantity)) {
                 errors.push(`Stock insuficiente para ${item.title} (${item.selectedColor || ''}). Pedidos: ${item.quantity}, Disponibles: ${color.stock}.`);
             }
         }
@@ -631,6 +659,223 @@ export default factories.createCoreController('api::product.product', ({ strapi 
                 details: err?.details
             });
             throw err;
+        }
+    },
+
+    /**
+     * Endpoint público para el storefront: omite costPrice y aplica stock del almacén web si está configurado.
+     */
+    async findStorefront(ctx) {
+        try {
+            const params = buildAdminFindParams(ctx.query);
+            const rawFilters = params.filters && typeof params.filters === 'object' ? { ...params.filters } : {};
+
+            if (ctx.query?.slug) {
+                rawFilters.slug = { $eq: String(ctx.query.slug) };
+            }
+            if (ctx.query?.featured === 'true') {
+                rawFilters.isFeaturedNew = { $eq: true };
+            }
+
+            rawFilters.isActive = { $eq: true };
+
+            const requireInStock = Boolean(rawFilters?.colors?.stock?.$gt !== undefined);
+
+            const companySetting = await (strapi.documents('api::company-setting.company-setting' as any) as any)
+                .findFirst()
+                .catch(() => null);
+            const configuredWhId = companySetting?.logisticsSettings?.webWarehouseId || null;
+
+            let webWhDocId: string | null = null;
+            if (configuredWhId) {
+                const candidateDocId = await resolveDocumentId(strapi, 'api::warehouse.warehouse', configuredWhId);
+                if (candidateDocId) {
+                    const wh = await strapi.documents('api::warehouse.warehouse').findOne({
+                        documentId: candidateDocId
+                    }) as any;
+                    if (wh && wh.isActive !== false) {
+                        webWhDocId = wh.documentId;
+                    }
+                }
+            }
+
+            const dbFilters: any = { ...rawFilters };
+            if (webWhDocId && dbFilters.colors && typeof dbFilters.colors === 'object') {
+                const { stock: _ignoredStockFilter, ...restColorFilters } = dbFilters.colors;
+                if (Object.keys(restColorFilters).length > 0) {
+                    dbFilters.colors = restColorFilters;
+                } else {
+                    delete dbFilters.colors;
+                }
+            }
+
+            const storefrontPopulate = {
+                categories: true,
+                productImage: true,
+                colors: {
+                    populate: {
+                        images: true,
+                        colorImage: true
+                    }
+                }
+            };
+
+            const allMatching: any[] = await strapi.documents('api::product.product').findMany({
+                filters: dbFilters,
+                ...(params.sort ? { sort: params.sort } : {}),
+                populate: storefrontPopulate,
+                limit: 5000
+            });
+
+            const stockByColorDocId = new Map<string, number>();
+            if (webWhDocId) {
+                const whStocks: any[] = await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
+                    filters: { warehouse: { documentId: webWhDocId } } as any,
+                    populate: { color: true },
+                    limit: 20000
+                });
+                for (const ws of whStocks) {
+                    const cDocId = ws?.color?.documentId;
+                    if (cDocId) {
+                        stockByColorDocId.set(String(cDocId), Number(ws.stock || 0));
+                    }
+                }
+            }
+
+            const sanitized = allMatching
+                .map((product) => {
+                    const { costPrice: _hiddenCostPrice, ...safeProduct } = product;
+                    const colors = Array.isArray(safeProduct.colors)
+                        ? safeProduct.colors.map((color: any) => ({
+                              ...color,
+                              stock: webWhDocId
+                                  ? stockByColorDocId.get(String(color.documentId)) ?? 0
+                                  : Number(color.stock ?? 0)
+                          }))
+                        : [];
+                    return {
+                        ...safeProduct,
+                        colors
+                    };
+                })
+                .filter((product) => {
+                    if (!requireInStock) return true;
+                    return product.colors.some((color: any) => Number(color.stock || 0) > 0);
+                });
+
+            const total = sanitized.length;
+            const start = Number.isFinite(Number(params.start)) && Number(params.start) >= 0 ? Number(params.start) : 0;
+            const requestedLimit = Number(params.limit);
+            const paged =
+                Number.isFinite(requestedLimit) && requestedLimit > 0
+                    ? sanitized.slice(start, start + requestedLimit)
+                    : sanitized.slice(start);
+
+            return ctx.send({
+                data: paged,
+                meta: {
+                    pagination: {
+                        start,
+                        limit: Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : total,
+                        total
+                    }
+                }
+            });
+        } catch (err: any) {
+            console.error('[findStorefront Error]:', err);
+            return ctx.internalServerError(err?.message || 'Error al obtener catálogo del storefront');
+        }
+    },
+
+    /**
+     * Consulta pública de disponibilidad en tiempo real de una o todas las variantes respetando el almacén web.
+     */
+    async findStorefrontColorStock(ctx) {
+        try {
+            const companySetting = await (strapi.documents('api::company-setting.company-setting' as any) as any)
+                .findFirst()
+                .catch(() => null);
+            const configuredWhId = companySetting?.logisticsSettings?.webWarehouseId || null;
+
+            let webWhDocId: string | null = null;
+            if (configuredWhId) {
+                const candidateWhDocId = await resolveDocumentId(strapi, 'api::warehouse.warehouse', configuredWhId);
+                if (candidateWhDocId) {
+                    const wh = await strapi.documents('api::warehouse.warehouse').findOne({
+                        documentId: candidateWhDocId
+                    }) as any;
+                    if (wh && wh.isActive !== false) {
+                        webWhDocId = wh.documentId;
+                    }
+                }
+            }
+
+            if (!ctx.params?.id) {
+                const colors: any[] = await strapi.documents('api::color.color').findMany({
+                    limit: 20000
+                });
+
+                const stockByColorDocId = new Map<string, number>();
+                if (webWhDocId) {
+                    const whStocks: any[] = await strapi.documents('api::warehouse-stock.warehouse-stock').findMany({
+                        filters: { warehouse: { documentId: webWhDocId } } as any,
+                        populate: { color: true },
+                        limit: 20000
+                    });
+                    for (const ws of whStocks) {
+                        const cDocId = ws?.color?.documentId;
+                        if (cDocId) {
+                            stockByColorDocId.set(String(cDocId), Number(ws.stock || 0));
+                        }
+                    }
+                }
+
+                return ctx.send({
+                    data: colors.map((color) => ({
+                        id: color.id,
+                        documentId: color.documentId,
+                        name: color.name,
+                        stock: webWhDocId
+                            ? stockByColorDocId.get(String(color.documentId)) ?? 0
+                            : Number(color.stock ?? 0)
+                    }))
+                });
+            }
+
+            const colorDocId = await resolveDocumentId(strapi, 'api::color.color', ctx.params.id);
+            if (!colorDocId) {
+                return ctx.notFound('Variante no encontrada');
+            }
+
+            const color = await strapi.documents('api::color.color').findOne({
+                documentId: colorDocId
+            }) as any;
+            if (!color) {
+                return ctx.notFound('Variante no encontrada');
+            }
+
+            let effectiveStock = Number(color.stock ?? 0);
+            if (webWhDocId) {
+                const whStock = await strapi.documents('api::warehouse-stock.warehouse-stock').findFirst({
+                    filters: {
+                        color: { documentId: color.documentId },
+                        warehouse: { documentId: webWhDocId }
+                    } as any
+                });
+                effectiveStock = Number(whStock?.stock ?? 0);
+            }
+
+            return ctx.send({
+                data: {
+                    id: color.id,
+                    documentId: color.documentId,
+                    name: color.name,
+                    stock: effectiveStock
+                }
+            });
+        } catch (err: any) {
+            console.error('[findStorefrontColorStock Error]:', err);
+            return ctx.internalServerError(err?.message || 'Error al consultar stock de variante');
         }
     }
 }));

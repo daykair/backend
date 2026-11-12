@@ -4,7 +4,10 @@
  * Defaults to `limit: -1` when no explicit pagination is requested so admin views
  * and dashboard aggregations are never silently truncated.
  */
-export function buildAdminFindParams(query: Record<string, any> = {}) {
+export function buildAdminFindParams(query: Record<string, any> = {}): Record<string, any> & {
+  limit: number;
+  start?: number;
+} {
   const { pagination, limit, start, ...rest } = query || {};
 
   let resolvedLimit: number | undefined;
