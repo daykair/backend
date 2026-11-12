@@ -198,7 +198,7 @@ export function buildAdminRoutes(
   extraCreatePerms: string[] = [],
 ) {
   const routes: any[] = [];
-  const baseHandler = `${uid}.${uid.split('.').pop()}`;
+  const baseHandler = uid;
 
   if (actions.includes('find')) {
     routes.push({
