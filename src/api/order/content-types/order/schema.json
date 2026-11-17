@@ -118,6 +118,12 @@
     },
     "paymentRecords": {
       "type": "json"
+    },
+    "statusHistory": {
+      "type": "json"
+    },
+    "rejectionReason": {
+      "type": "text"
     }
   }
 }

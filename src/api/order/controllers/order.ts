@@ -30,6 +30,7 @@ const orderLineItemSchema = yup.object({
   sizeId: yup.mixed().nullable().optional(),
   sizeName: yup.string().nullable().optional(),
   quantity: yup.number().required().min(0.01),
+  returnedQuantity: yup.number().optional().min(0),
   unitPrice: yup.number().required().min(0),
   unitCost: yup.number().optional().min(0),
   productName: yup.string().optional(),
@@ -76,6 +77,8 @@ const orderRequestSchema = yup.object({
           shippingCost: yup.number().nullable().optional(),
           discount: yup.number().nullable().optional().min(0),
           notes: yup.string().nullable().optional(),
+          rejectionReason: yup.string().nullable().optional(),
+          statusHistoryNote: yup.string().nullable().optional(),
           dispatchWarehouse: yup.mixed().nullable().optional(),
           items: orderItemArray.optional(),
           order: orderItemArray.optional(),
@@ -148,7 +151,7 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
 
       const result = await strapi
         .service('api::order.order')
-        .processOrderTransaction(payload.data.orderData);
+        .processOrderTransaction(payload.data.orderData, ctx.state?.user);
       return ctx.send({ data: result });
     } catch (err: any) {
       if (err.name === 'ValidationError') {
@@ -231,13 +234,30 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
           amountPaid: newAmountPaid,
         };
 
+        const alreadyConfirmedStatuses = new Set([
+          'payment_confirmed',
+          'preparing',
+          'shipped',
+          'delivered',
+        ]);
         if (
           isFullyPaid &&
-          order.orderStatus !== 'payment_confirmed' &&
-          order.orderStatus !== 'delivered'
+          !alreadyConfirmedStatuses.has(String(order.orderStatus || '').trim().toLowerCase())
         ) {
           updateData.orderStatus = 'payment_confirmed';
         }
+
+        const statusHistory = Array.isArray(order.statusHistory) ? [...order.statusHistory] : [];
+        statusHistory.push({
+          at: new Date().toISOString(),
+          status: updateData.orderStatus || order.orderStatus || 'pending',
+          action: 'payment_added',
+          note: `Abono $${Number(parsedAmount).toFixed(2)} (${cleanMethod}${
+            reference ? ` · Ref: ${reference}` : ''
+          })`,
+          performedBy: ctx.state?.user?.username || ctx.state?.user?.email || 'Admin',
+        });
+        updateData.statusHistory = statusHistory;
 
         await (strapi.db as any).query('api::order.order').update({
           where: { id: order.id },
@@ -448,12 +468,22 @@ export default factories.createCoreController('api::order.order', ({ strapi }) =
             amountPaid: Number(orderTotal.toFixed(2)),
           };
 
-          const shouldConfirm =
-            order.orderStatus !== 'payment_confirmed' &&
-            order.orderStatus !== 'delivered';
+          const shouldConfirm = !['payment_confirmed', 'preparing', 'shipped', 'delivered'].includes(
+            String(order.orderStatus || '').trim().toLowerCase(),
+          );
           if (shouldConfirm) {
             updateData.orderStatus = 'payment_confirmed';
           }
+
+          const statusHistory = Array.isArray(order.statusHistory) ? [...order.statusHistory] : [];
+          statusHistory.push({
+            at: new Date().toISOString(),
+            status: updateData.orderStatus || order.orderStatus || 'pending',
+            action: 'batch_settled',
+            note: `Liquidación en lote $${remaining.toFixed(2)} (${method} · ${reference})`,
+            performedBy: ctx.state?.user?.username || ctx.state?.user?.email || 'Admin',
+          });
+          updateData.statusHistory = statusHistory;
 
           await (strapi.db as any).query('api::order.order').update({
             where: { id: order.id },

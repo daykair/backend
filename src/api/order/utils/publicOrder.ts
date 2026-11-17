@@ -113,6 +113,8 @@ export function sanitizePublicOrder(order: any, options?: { includeCustomerPii?:
     orderStatus: order.orderStatus,
     orderTotal: Number(order.orderTotal || 0),
     amountPaid: Number(order.amountPaid || 0),
+    shippingCost: Number(order.shippingCost || 0),
+    rejectionReason: order.rejectionReason || '',
     orderType: order.orderType || 'regular',
     method: order.method || '',
     deliveryMethod: order.deliveryMethod || '',
@@ -175,7 +177,7 @@ export async function sendOrderStatusNotification(
   previousStatus?: string | null,
 ): Promise<void> {
   if (!order || !nextStatus || nextStatus === previousStatus) return;
-  if (nextStatus !== 'payment_confirmed' && nextStatus !== 'delivered') return;
+  if (nextStatus !== 'payment_confirmed' && nextStatus !== 'shipped' && nextStatus !== 'delivered') return;
   if (!process.env.SMTP_USERNAME || !process.env.SMTP_PASSWORD) return;
 
   const recipient = String(order.email || '').trim();
@@ -195,16 +197,23 @@ export async function sendOrderStatusNotification(
     const tracking = escapeHtml(order.trackingNumber || '');
 
     const isConfirmed = nextStatus === 'payment_confirmed';
+    const isShipped = nextStatus === 'shipped';
     const subject = isConfirmed
       ? `${companySetting?.commercialName || 'Tienda Online'}: Pago confirmado para tu pedido #${order.slug || order.id}`
-      : `${companySetting?.commercialName || 'Tienda Online'}: Tu pedido #${order.slug || order.id} ha sido despachado`;
+      : isShipped
+        ? `${companySetting?.commercialName || 'Tienda Online'}: Tu pedido #${order.slug || order.id} ha sido enviado`
+        : `${companySetting?.commercialName || 'Tienda Online'}: Tu pedido #${order.slug || order.id} ha sido entregado`;
 
     const headline = isConfirmed
       ? '¡Tu pago ha sido confirmado!'
-      : '¡Tu pedido ha sido despachado / entregado!';
+      : isShipped
+        ? '¡Tu pedido ha sido enviado!'
+        : '¡Tu pedido ha sido entregado!';
     const intro = isConfirmed
       ? 'Hemos verificado tu pago exitosamente y estamos preparando tu orden.'
-      : 'Tu pedido ha cambiado a estado entregado/despachado.';
+      : isShipped
+        ? 'Tu pedido ya va en camino con la agencia o repartidor asignado.'
+        : 'Tu pedido ha sido marcado como entregado.';
 
     const trackingHtml = tracking
       ? `<div style="margin:16px 0;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;">

@@ -829,6 +829,8 @@ export interface ApiOrderOrder extends Struct.CollectionTypeSchema {
     >;
     orderItems: Schema.Attribute.JSON;
     paymentRecords: Schema.Attribute.JSON;
+    statusHistory: Schema.Attribute.JSON;
+    rejectionReason: Schema.Attribute.Text;
     createdAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     publishedAt: Schema.Attribute.DateTime;

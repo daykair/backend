@@ -49,8 +49,24 @@ const ORDER_FIELDS = [
   'shippingCost',
   'discount',
   'notes',
+  'rejectionReason',
   'dispatchWarehouse',
 ];
+
+function appendOrderHistory(
+  existing: unknown,
+  entry: { status?: string; action: string; note?: string; performedBy?: string },
+) {
+  const list = Array.isArray(existing) ? [...existing] : [];
+  list.push({
+    at: new Date().toISOString(),
+    status: entry.status || 'pending',
+    action: entry.action,
+    ...(entry.note ? { note: entry.note } : {}),
+    performedBy: entry.performedBy || 'Sistema',
+  });
+  return list;
+}
 
 function normalizeOrderStatus(status?: string): string | undefined {
   if (!status) return status;
@@ -58,6 +74,8 @@ function normalizeOrderStatus(status?: string): string | undefined {
   const lower = trimmed.toLowerCase();
   if (lower === 'pendiente por pago') return 'pending';
   if (lower === 'verification_failed') return 'failed_verification';
+  if (lower === 'en preparacion' || lower === 'en preparación' || lower === 'preparing') return 'preparing';
+  if (lower === 'enviado' || lower === 'en transito' || lower === 'en tránsito' || lower === 'shipped') return 'shipped';
   return trimmed;
 }
 
@@ -105,7 +123,7 @@ function buildOrFilters(values: any[]) {
   return or.length > 0 ? { $or: or } : null;
 }
 
-function buildOrderPayload(orderData: any, payments: any[]) {
+function buildOrderPayload(orderData: any, payments: any[], isNewOrder = false) {
   const payload: any = {};
 
   for (const field of ORDER_FIELDS) {
@@ -132,7 +150,7 @@ function buildOrderPayload(orderData: any, payments: any[]) {
     }
   }
 
-  if (!payload.orderPlaced) {
+  if (isNewOrder && !payload.orderPlaced) {
     payload.orderPlaced = new Date().toISOString();
   }
 
@@ -166,7 +184,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
   const dbQuery = (uid: string) => (strapi.db as any).query(uid);
 
   return {
-    async processOrderTransaction(orderData: any) {
+    async processOrderTransaction(orderData: any, currentUser?: any) {
       const items = Array.isArray(orderData.items)
         ? orderData.items
         : Array.isArray(orderData.order)
@@ -174,11 +192,12 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         : Array.isArray(orderData.orderItems)
         ? orderData.orderItems
         : [];
-      const payments = Array.isArray(orderData.payments)
+      const rawPayments = Array.isArray(orderData.payments)
         ? orderData.payments
         : Array.isArray(orderData.payment)
         ? orderData.payment
         : [];
+      const payments = rawPayments.filter((p: any) => Number(p?.amount || 0) > 0);
       const hasOrderItems =
         Array.isArray(orderData.items) ||
         Array.isArray(orderData.order) ||
@@ -189,8 +208,8 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
 
       const txOutcome = await strapi.db.transaction(async (trx) => {
         try {
-          const orderPayload = buildOrderPayload(orderData, payments);
           const where = lookupValue ? buildWhere(lookupValue) : null;
+          const orderPayload = buildOrderPayload(orderData, payments, !where);
 
           const existingOrder = where
             ? await dbQuery('api::order.order').findOne({
@@ -204,6 +223,16 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                   'amountPaid',
                   'method',
                   'paymentReference',
+                  'trackingNumber',
+                  'deliveryMethod',
+                  'option',
+                  'shippingCost',
+                  'adress',
+                  'city',
+                  'notes',
+                  'rejectionReason',
+                  'statusHistory',
+                  'exchangeRate',
                   'orderItems',
                   'paymentRecords',
                 ],
@@ -358,12 +387,23 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               if (size.documentId) sizeMap.set(String(size.documentId), size);
             });
 
-            // Map existing items to preserve productImage if not sent in partial updates
+            // Map existing items to preserve productImage and returnedQuantity if not sent in partial updates
             const existingItemImageMap = new Map<string, string>();
+            const existingReturnedMap = new Map<string, number>();
             if (Array.isArray(existingOrder?.orderItems)) {
               existingOrder.orderItems.forEach((exItem: any) => {
-                const key = `${exItem.product || exItem.productId}-${exItem.color || exItem.colorId}`;
+                const pId = normalizeIdentifier(exItem.product || exItem.productId) || '';
+                const cId = normalizeIdentifier(exItem.color || exItem.colorId) || '';
+                const sId = normalizeIdentifier(exItem.size || exItem.sizeId) || '';
+                const key = `${pId}-${cId}`;
+                const keyWithSize = `${pId}-${cId}-${sId}`;
                 if (exItem.productImage) existingItemImageMap.set(key, exItem.productImage);
+                if (exItem.returnedQuantity !== undefined && exItem.returnedQuantity !== null) {
+                  existingReturnedMap.set(keyWithSize, Number(exItem.returnedQuantity || 0));
+                  if (!existingReturnedMap.has(key)) {
+                    existingReturnedMap.set(key, Number(exItem.returnedQuantity || 0));
+                  }
+                }
               });
             }
 
@@ -379,7 +419,17 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                 color?.images?.[0]?.formats?.small?.url ||
                 color?.images?.[0]?.url ||
                 '';
-              const lookupKey = `${product?.id || item.productId}-${color?.id || item.colorId}`;
+              const resolvedPId = product?.id || normalizeIdentifier(item.productId) || '';
+              const resolvedCId = color?.id || normalizeIdentifier(item.colorId) || '';
+              const resolvedSId = size?.id || rawSizeId || '';
+              const lookupKey = `${resolvedPId}-${resolvedCId}`;
+              const lookupWithSizeKey = `${resolvedPId}-${resolvedCId}-${resolvedSId}`;
+              const preservedReturned =
+                item.returnedQuantity !== undefined && item.returnedQuantity !== null
+                  ? Number(item.returnedQuantity || 0)
+                  : existingReturnedMap.get(lookupWithSizeKey) ??
+                    existingReturnedMap.get(lookupKey) ??
+                    0;
 
               return {
                 productName: item.productName || item.title || product?.title || 'Producto',
@@ -392,6 +442,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                     }
                   : {}),
                 quantity,
+                returnedQuantity: preservedReturned,
                 unitPrice: Number(item.unitPrice ?? item.price ?? 0),
                 unitCost:
                   item.unitCost !== undefined && item.unitCost !== null
@@ -415,10 +466,17 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           const effectiveOrderType =
             orderPayload.orderType || existingOrder?.orderType || 'regular';
           const effectiveStatus =
-            orderPayload.orderStatus || existingOrder?.orderStatus || 'pending';
+            normalizeOrderStatus(orderPayload.orderStatus || existingOrder?.orderStatus) || 'pending';
           const effectiveTotal = Number(
             orderPayload.orderTotal ?? existingOrder?.orderTotal ?? 0,
           );
+          const CONFIRMED_FLOW_STATUSES = new Set([
+            'payment_confirmed',
+            'preparing',
+            'shipped',
+            'delivered',
+          ]);
+          const isConfirming = CONFIRMED_FLOW_STATUSES.has(effectiveStatus);
 
           if (hasPayments && payments.length > 0) {
             const paymentRecords = payments.map((payment: any) => ({
@@ -434,10 +492,11 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             const existingRecords = Array.isArray(existingOrder.paymentRecords)
               ? existingOrder.paymentRecords
               : [];
-            const isConfirming =
-              effectiveStatus === 'payment_confirmed' || effectiveStatus === 'delivered';
+            const hasConfirmedRecords = existingRecords.some(
+              (r: any) => (!r?.status || r.status === 'confirmed') && Number(r?.amount || 0) > 0,
+            );
 
-            if (isConfirming && existingRecords.length === 0) {
+            if (isConfirming && !hasConfirmedRecords) {
               const rawMethod = orderPayload.method || existingOrder.method || 'Pago Móvil';
               const normalizedMethod =
                 rawMethod === 'pago-movil'
@@ -447,22 +506,31 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
                   : rawMethod === 'cashea'
                   ? 'Cashea'
                   : rawMethod;
+              const explicitPaid =
+                orderPayload.amountPaid !== undefined && Number(orderPayload.amountPaid) > 0
+                  ? Number(orderPayload.amountPaid)
+                  : 0;
               const paidAmount =
-                effectiveOrderType === 'regular'
-                  ? effectiveTotal
-                  : Number(orderPayload.amountPaid ?? existingOrder.amountPaid ?? 0) ||
-                    (effectiveOrderType === 'cashea'
-                      ? Number((effectiveTotal * 0.4).toFixed(2))
-                      : 0);
+                explicitPaid > 0
+                  ? explicitPaid
+                  : effectiveOrderType === 'regular'
+                    ? effectiveTotal
+                    : Number(existingOrder.amountPaid ?? 0) > 0
+                      ? Number(existingOrder.amountPaid)
+                      : effectiveOrderType === 'cashea'
+                        ? Number((effectiveTotal * 0.4).toFixed(2))
+                        : effectiveTotal;
 
               if (paidAmount > 0) {
-                orderPayload.amountPaid = paidAmount;
+                orderPayload.amountPaid = Number(paidAmount.toFixed(2));
                 orderPayload.paymentRecords = [
+                  ...existingRecords,
                   {
-                    amount: paidAmount,
+                    amount: Number(paidAmount.toFixed(2)),
                     method: normalizedMethod,
                     reference:
                       orderPayload.paymentReference || existingOrder.paymentReference || '',
+                    currency: 'USD',
                     status: 'confirmed',
                     date: new Date().toISOString(),
                   },
@@ -476,6 +544,92 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           } else {
             orderPayload.paymentRecords = [];
           }
+
+          if (effectiveStatus === 'failed_verification' && orderData.rejectionReason) {
+            const cleanReason = String(orderData.rejectionReason).trim();
+            orderPayload.rejectionReason = cleanReason;
+            const dateTag = toCaracasDateStr(new Date()) || new Date().toISOString().split('T')[0];
+            const rejNote = `[Rechazo de pago ${dateTag}: ${cleanReason}]`;
+            const baseNotes = orderPayload.notes !== undefined ? orderPayload.notes : existingOrder?.notes;
+            if (!String(baseNotes || '').includes(rejNote)) {
+              orderPayload.notes = [baseNotes, rejNote].filter(Boolean).join('\n');
+            }
+          } else if (isConfirming) {
+            orderPayload.rejectionReason = null;
+          }
+
+          // Bitácora automática del ciclo de vida del pedido
+          const previousNormStatus = existingOrder?.orderStatus
+            ? normalizeOrderStatus(existingOrder.orderStatus)
+            : null;
+          const actorName =
+            currentUser?.username ||
+            currentUser?.email ||
+            (orderData.performedBy ? 'Admin' : existingOrder ? 'Admin' : 'Tienda Web');
+          let nextHistory = Array.isArray(existingOrder?.statusHistory)
+            ? [...existingOrder.statusHistory]
+            : [];
+
+          if (!existingOrder) {
+            nextHistory = appendOrderHistory(nextHistory, {
+              status: effectiveStatus,
+              action: 'created',
+              note: orderData.statusHistoryNote || 'Pedido registrado',
+              performedBy: actorName,
+            });
+          } else {
+            if (previousNormStatus !== effectiveStatus) {
+              nextHistory = appendOrderHistory(nextHistory, {
+                status: effectiveStatus,
+                action: 'status_changed',
+                note:
+                  effectiveStatus === 'failed_verification' && orderPayload.rejectionReason
+                    ? `Motivo: ${orderPayload.rejectionReason}`
+                    : orderData.statusHistoryNote || undefined,
+                performedBy: actorName,
+              });
+            }
+            const nextTracking =
+              orderPayload.trackingNumber !== undefined
+                ? String(orderPayload.trackingNumber || '').trim()
+                : '';
+            const prevTracking = String(existingOrder.trackingNumber || '').trim();
+            if (orderPayload.trackingNumber !== undefined && nextTracking && nextTracking !== prevTracking) {
+              nextHistory = appendOrderHistory(nextHistory, {
+                status: effectiveStatus,
+                action: 'tracking_updated',
+                note: `Guía asignada: ${nextTracking}`,
+                performedBy: actorName,
+              });
+            }
+            const nextOpt =
+              orderPayload.option !== undefined ? String(orderPayload.option || '').trim() : '';
+            const prevOpt = String(existingOrder.option || '').trim();
+            const nextCost =
+              orderPayload.shippingCost !== undefined
+                ? Number(orderPayload.shippingCost || 0)
+                : Number(existingOrder.shippingCost || 0);
+            const prevCost = Number(existingOrder.shippingCost || 0);
+            if (
+              (orderPayload.option !== undefined && nextOpt !== prevOpt) ||
+              (orderPayload.shippingCost !== undefined && nextCost !== prevCost)
+            ) {
+              const effDeliv = String(
+                orderPayload.deliveryMethod ?? existingOrder.deliveryMethod ?? '',
+              ).toLowerCase();
+              const deliveryLabel =
+                effDeliv === 'pickup'
+                  ? 'Retiro en tienda'
+                  : nextOpt || prevOpt || 'Delivery';
+              nextHistory = appendOrderHistory(nextHistory, {
+                status: effectiveStatus,
+                action: 'logistics_updated',
+                note: `${deliveryLabel} · Costo: $${nextCost.toFixed(2)}`,
+                performedBy: actorName,
+              });
+            }
+          }
+          orderPayload.statusHistory = nextHistory;
 
           let savedOrder: any;
           if (existingOrder) {
@@ -511,9 +665,6 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             transacting: trx,
           });
 
-          const previousNormStatus = existingOrder?.orderStatus
-            ? normalizeOrderStatus(existingOrder.orderStatus)
-            : null;
           return { result: sanitizeEntityUserRelations(result), previousNormStatus };
         } catch (e) {
           console.error('------- TRANSACTION ERROR DETECTED -------');
@@ -524,7 +675,11 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
       });
 
       const nextNormStatus = normalizeOrderStatus(txOutcome.result?.orderStatus);
-      if (nextNormStatus === 'payment_confirmed' || nextNormStatus === 'delivered') {
+      if (
+        nextNormStatus === 'payment_confirmed' ||
+        nextNormStatus === 'shipped' ||
+        nextNormStatus === 'delivered'
+      ) {
         const publicUtils = require('../utils/publicOrder');
         void publicUtils.sendOrderStatusNotification(
           strapi,
@@ -540,28 +695,31 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
     async processInventoryStockAndExpense(order: any, items: any[], trx: any) {
       const orderId = order.id;
       const orderDocId = order.documentId;
-      const normalizedStatus = normalizeOrderStatus(order.orderStatus);
+      const fullOrder = await dbQuery('api::order.order').findOne({
+        where: { id: orderId },
+        populate: ['dispatchWarehouse', 'performedBy'],
+        transacting: trx,
+      });
+
+      const normalizedStatus = normalizeOrderStatus(order.orderStatus || fullOrder?.orderStatus);
       const isCancelled =
         normalizedStatus === 'cancelled' || normalizedStatus === 'returned';
       const shouldDeduct =
         normalizedStatus !== 'failed_verification' &&
         !isCancelled &&
         (normalizedStatus === 'payment_confirmed' ||
+          normalizedStatus === 'preparing' ||
+          normalizedStatus === 'shipped' ||
           normalizedStatus === 'delivered' ||
           (normalizedStatus !== 'pending' &&
-            (order.orderType === 'credit' || order.orderType === 'apartado')) ||
-          (order.orderType === 'cashea' && Number(order.amountPaid) > 0));
+            ((order.orderType || fullOrder?.orderType) === 'credit' ||
+              (order.orderType || fullOrder?.orderType) === 'apartado')) ||
+          ((order.orderType || fullOrder?.orderType) === 'cashea' &&
+            Number(order.amountPaid ?? fullOrder?.amountPaid ?? 0) > 0));
 
-      let dispatchWarehouse = normalizeIdentifier(order.dispatchWarehouse);
-
-      if (!dispatchWarehouse) {
-        const fullOrder = await dbQuery('api::order.order').findOne({
-          where: { id: orderId },
-          populate: ['dispatchWarehouse'],
-          transacting: trx,
-        });
-        dispatchWarehouse = normalizeIdentifier(fullOrder?.dispatchWarehouse || null);
-      }
+      let dispatchWarehouse = normalizeIdentifier(
+        order.dispatchWarehouse ?? fullOrder?.dispatchWarehouse ?? null,
+      );
 
       if (dispatchWarehouse && !isNumericIdentifier(dispatchWarehouse)) {
         const warehouse = await dbQuery('api::warehouse.warehouse').findOne({
@@ -635,17 +793,14 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               items: remainingReturnItems,
               quantity: remainingReturnQty,
               date: new Date().toISOString(),
-              performedBy: order.performedBy?.id || order.performedBy || null,
-              exchangeRate: order.exchangeRate || 1,
+              performedBy: order.performedBy?.id || order.performedBy || fullOrder?.performedBy?.id || null,
+              exchangeRate: order.exchangeRate || fullOrder?.exchangeRate || 1,
               warehouse: dispatchWarehouse,
             },
             transacting: trx,
           });
         }
-        return;
-      }
-
-      if (shouldDeduct && !existingSale) {
+      } else if (shouldDeduct && !existingSale) {
         await dbQuery('api::inventory-movement.inventory-movement').create({
           data: {
             type: 'OUT',
@@ -748,31 +903,63 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         }
       }
 
-      if (order.deliveryMethod === 'delivery' && order.option && order.option !== 'Propio') {
-        const primaryRef = `Delivery de la Orden #${orderDocId || orderId}`;
-        const existingExpenses = await dbQuery('api::expense.expense').findMany({
-          where: {
-            $or: [
-              ...(orderDocId
-                ? [{ reference: { $eq: `Delivery de la Orden #${orderDocId}` } }]
-                : []),
-              ...(orderId
-                ? [{ reference: { $eq: `Delivery de la Orden #${orderId}` } }]
-                : []),
-            ],
-          },
-          transacting: trx,
-        });
+      const existingExpenses = await dbQuery('api::expense.expense').findMany({
+        where: {
+          $or: [
+            ...(orderDocId
+              ? [{ reference: { $eq: `Delivery de la Orden #${orderDocId}` } }]
+              : []),
+            ...(orderId
+              ? [{ reference: { $eq: `Delivery de la Orden #${orderId}` } }]
+              : []),
+          ],
+        },
+        transacting: trx,
+      });
 
-        const expenseTitle = `Delivery - ${order.option} - ${order.adress || 'Sin dirección'}`;
+      const effDeliveryMethod = String(order.deliveryMethod ?? fullOrder?.deliveryMethod ?? '')
+        .trim()
+        .toLowerCase();
+      const effOption = String(order.option ?? fullOrder?.option ?? '').trim();
+      const effShippingCost = Number(order.shippingCost ?? fullOrder?.shippingCost ?? 0);
+      const isOwnCourier = effOption.toLowerCase() === 'propio';
+      const isPaidDeliveryType =
+        (effDeliveryMethod === 'delivery' && !isOwnCourier) ||
+        effDeliveryMethod === 'envio_nacional' ||
+        effDeliveryMethod === 'envio';
+      const shouldHaveDeliveryExpense =
+        shouldDeduct && !isCancelled && isPaidDeliveryType && effShippingCost > 0;
+
+      if (shouldHaveDeliveryExpense) {
+        const primaryRef = `Delivery de la Orden #${orderDocId || orderId}`;
+        const courierOrAgency =
+          effOption || (effDeliveryMethod === 'delivery' ? 'Delivery Local' : 'Agencia Nacional');
+        const locationLabel =
+          order.adress || fullOrder?.adress || order.city || fullOrder?.city || 'Sin dirección';
+        const expenseTitle = `${
+          effDeliveryMethod === 'delivery' ? 'Delivery' : 'Envío'
+        } - ${courierOrAgency} - ${locationLabel}`;
+        const expenseDate =
+          toCaracasDateStr(order.orderPlaced || fullOrder?.orderPlaced || new Date()) ||
+          new Date().toISOString().split('T')[0];
+        const performerId =
+          normalizeIdentifier(order.performedBy) ||
+          fullOrder?.performedBy?.id ||
+          null;
+        const expRate = Number(order.exchangeRate || fullOrder?.exchangeRate || 1);
+
         if (!existingExpenses || existingExpenses.length === 0) {
           await dbQuery('api::expense.expense').create({
             data: {
+              documentId: crypto.randomBytes(12).toString('hex'),
               title: expenseTitle,
-              amount: Number(order.shippingCost) || 0,
-              date: new Date().toISOString().split('T')[0],
+              amount: Number(effShippingCost.toFixed(2)),
+              date: expenseDate,
               category: 'Operaciones',
               reference: primaryRef,
+              performedBy: performerId,
+              exchangeRate: expRate,
+              publishedAt: new Date().toISOString(),
             },
             transacting: trx,
           });
@@ -781,9 +968,11 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
           await dbQuery('api::expense.expense').update({
             where: { id: first.id },
             data: {
+              ...(first.documentId ? {} : { documentId: crypto.randomBytes(12).toString('hex') }),
               title: expenseTitle,
-              amount: Number(order.shippingCost) || 0,
+              amount: Number(effShippingCost.toFixed(2)),
               reference: primaryRef,
+              ...(first.publishedAt ? {} : { publishedAt: new Date().toISOString() }),
             },
             transacting: trx,
           });
@@ -794,6 +983,13 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
               transacting: trx,
             });
           }
+        }
+      } else if (Array.isArray(existingExpenses) && existingExpenses.length > 0) {
+        for (const exp of existingExpenses) {
+          await dbQuery('api::expense.expense').delete({
+            where: { id: exp.id },
+            transacting: trx,
+          });
         }
       }
     },
@@ -1341,6 +1537,12 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         const dateTag = new Date().toISOString().split('T')[0];
         const noteEntry = `[Devolución ${dateTag}: ${totalReturnedNow} und / -$${creditApplied.toFixed(2)}${reasonSuffix}]`;
         const nextNotes = [order.notes, noteEntry].filter(Boolean).join('\n');
+        const nextHistory = appendOrderHistory(order.statusHistory, {
+          status: allReturned ? 'returned' : currentStatus,
+          action: 'partial_return',
+          note: `${totalReturnedNow} und devueltas (-$${creditApplied.toFixed(2)})${reasonSuffix}`,
+          performedBy: user?.username || user?.email || 'Admin',
+        });
 
         await dbQuery('api::order.order').update({
           where: { id: order.id },
@@ -1350,6 +1552,7 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
             amountPaid: nextAmountPaid,
             orderStatus: allReturned ? 'returned' : currentStatus,
             notes: nextNotes,
+            statusHistory: nextHistory,
           },
           transacting: trx,
         });
@@ -1889,11 +2092,20 @@ export default factories.createCoreService('api::order.order', ({ strapi }) => {
         referenceImageId = fileRow.id;
       }
 
+      const nextHistory = appendOrderHistory(existing.statusHistory, {
+        status: 'pending_verification',
+        action: 'proof_uploaded',
+        note: `Referencia enviada: ${paymentReference}`,
+        performedBy: 'Cliente Web',
+      });
+
       const updated = await strapi.documents('api::order.order').update({
         documentId: existing.documentId,
         data: {
           paymentReference,
           orderStatus: 'pending_verification',
+          rejectionReason: null,
+          statusHistory: nextHistory,
           ...(referenceImageId ? { referenceImage: referenceImageId } : {}),
         } as any,
       });
