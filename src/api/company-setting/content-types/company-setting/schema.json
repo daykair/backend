@@ -63,6 +63,9 @@
     },
     "operationalSettings": {
       "type": "json"
+    },
+    "redesSettings": {
+      "type": "json"
     }
   }
 }
