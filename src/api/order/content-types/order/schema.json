@@ -60,6 +60,10 @@
       "type": "string",
       "private": true
     },
+    "clientCi": {
+      "type": "string",
+      "private": true
+    },
     "referenceImage": {
       "type": "media",
       "multiple": false,

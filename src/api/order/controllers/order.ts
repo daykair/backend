@@ -67,6 +67,7 @@ const orderRequestSchema = yup.object({
             otherwise: (schema) => schema.optional(),
           }),
           clientName: yup.string().nullable().optional(),
+          clientCi: yup.string().nullable().optional(),
           paymentReference: yup.string().nullable().optional(),
           trackingNumber: yup.string().nullable().optional(),
           orderType: yup.string().optional(),

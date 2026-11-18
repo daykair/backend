@@ -127,6 +127,7 @@ export function sanitizePublicOrder(order: any, options?: { includeCustomerPii?:
 
   if (options?.includeCustomerPii) {
     safeOrder.clientName = order.clientName || '';
+    safeOrder.clientCi = order.clientCi || '';
     safeOrder.phone = order.phone || '';
     safeOrder.email = order.email || '';
     safeOrder.city = order.city || '';
